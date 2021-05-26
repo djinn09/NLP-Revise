@@ -140,3 +140,14 @@ cython_debug/
 Text-generation/training_pt/checkpoint
 Text-generation/training_pt/cp.ckpt.data-00000-of-00001
 Text-generation/training_pt/cp.ckpt.index
+Text-generation/model/*
+Text_classification/model/lda.model
+.gitignore
+Text_classification/model/lda.model.state
+Text_classification/model/pos_lda_model.model
+Text_classification/model/pos_lda_model.model.id2word
+Text_classification/model/topic_file
+Text_classification/model/pos_lda_model.model.state
+Text_classification/model/pos_lda_model.model.expElogbeta.npy
+Text_classification/model/lda.model.id2word
+Text_classification/model/lda.model.expElogbeta.npy
