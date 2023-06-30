@@ -1,0 +1,8 @@
+allennlp==1.4.1 
+allennlp-models==1.4.0 
+spacy==2.1.0
+neuralcoref==4.0.0
+nltk==3.6.5
+fastapi==0.70.0
+uvicorn==0.13.4
+app/models/en_core_web_sm-2.1.0.tar.gz
