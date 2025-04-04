@@ -125,6 +125,15 @@ class FuzzyIntersectionStrategy(PartialIntersectionStrategy):
 
     @staticmethod
     def flatten_cluster(list_of_clusters):
+        """Flatten a list of clusters into a single list of spans.
+
+        Args:
+            list_of_clusters (List[List[List[int]]]): A list of clusters, where each cluster is a list of spans, and each span is a list of two integers describing the start and end of the span.
+
+        Returns:
+            List[List[int]]: A list of all the spans in the input clusters.
+
+        """
         return [span for cluster in list_of_clusters for span in cluster]
 
     def _check_whether_spans_are_within_range(self, allen_span, hugging_span):

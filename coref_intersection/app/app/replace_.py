@@ -38,10 +38,8 @@ def get_cluster_head(doc: Doc, cluster: List[List[int]], noun_indices: List[int]
     return head_span, [head_start, head_end]
 
 
-def improved_replace_corefs(document, clusters):
-    """
-    Nested coreferent mentions
-    """
+def improved_replace_co_refs(document, clusters):
+    """Nested coreference mentions."""
     resolved = list(tok.text_with_ws for tok in document)
     all_spans = [
         span for cluster in clusters for span in cluster

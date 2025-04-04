@@ -1,0 +1,13 @@
+
+# Assume Python 3.7
+target-version = "py37"
+line-length = 120
+indent-width = 4
+
+# Enable all rules
+# This is equivalent to `ruff --select ALL`
+[lint]
+select = ["ALL"]
+ignore = ["UP006", "ERA001","DUFF"]
+
+

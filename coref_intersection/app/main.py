@@ -1,3 +1,11 @@
+"""Main application module for coreference resolution.
+
+This module initializes and configures a FastAPI application with endpoints
+for coreference resolution using SpaCy, NeuralCoref, and AllenNLP models.
+It also includes middleware, logging, and utility functions.
+"""
+
+import logging
 import os
 from functools import lru_cache
 
@@ -9,11 +17,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from starlette.middleware import Middleware
 
-from app.base_model import RequestBody, setting
 from app.allennlp_coref import get_allennlp_coref, get_coref_object
+from app.base_model import RequestBody, setting
 from app.middleware import ResponseTimeMiddleWare
 from app.utils import get_neural_reference_resolved
-from concurrent.futures import ThreadPoolExecutor
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("app.log"),
+    ],
+)
+logger = logging.getLogger(__name__)
+logger.info("Starting the application...")
+logger.info("Loading environment variables...")
 
 # middlewares
 middlewares = (
@@ -27,10 +46,12 @@ middlewares = (
     ),
 )
 
-os.environ["NEURALCOREF_CACHE"] = "{}/{}".format(os.getcwd(), setting.NEURALCOREF_CACHE)
-print(os.getenv("NEURALCOREF_CACHE"))
+# Load the neuralcoref model
+logger.info("NEURALCOREF_CACHE:%s", os.getenv("NEURALCOREF_CACHE"))
+logger.info("Loading Spacy model...")
 nlp = spacy.load("en_core_web_sm")
-print("Loaded model spacy model.....")
+logger.info("Loaded spacy model.....")
+logger.info("Loading neuralcoref model...")
 neuralcoref.add_to_pipe(
     nlp,
     max_dist=200,
@@ -45,13 +66,24 @@ neuralcoref.add_to_pipe(
         ],
     },
 )
-print("Loaded model neuralcoref......")
+logger.info("Loaded model neuralcoref......")
+logger.info("Loading allen-nlp model...")
+# Load the allen-nlp model
 predictor = get_coref_object(setting.ALLEN_NLP_MODEL_URL)
-print("Loaded model allen nlp")
+logger.info("Loaded model allen nlp")
 
 
 @lru_cache()
 def get_app() -> FastAPI:
+    """Create and configure a FastAPI application instance with specified settings.
+
+    This function initializes the FastAPI application with middleware and
+    configurations based on the provided settings and middleware.
+
+    Returns:
+        FastAPI: The configured FastAPI application instance.
+
+    """
     server = FastAPI(
         title=setting.app_name,
         debug=setting.DEBUG,
@@ -62,6 +94,12 @@ def get_app() -> FastAPI:
 
     @server.get("/")
     async def root_get() -> RedirectResponse:
+        """Redirect to the docs page.
+
+        Returns:
+            RedirectResponse: The redirect response to the docs page.
+
+        """
         return RedirectResponse("/docs")
 
     return server
@@ -71,28 +109,52 @@ app = get_app()
 
 
 @app.get("/ping")
-async def ping() -> str:
+async def ping() -> dict:
+    """Handle GET requests to the /ping endpoint.
+
+    Returns:
+        str: A response message indicating success with the message "pong".
+
+    """
     return {"msg": "pong"}
 
 
 @app.post("/coref")
-async def coref(data: RequestBody):
-    text = data.text
+async def coref(data: RequestBody) -> dict:
+    """Handle POST requests to the /coref endpoint.
+
+    Args:
+        data (RequestBody): The request body containing the text to process.
+
+    Returns:
+        dict: A response dictionary containing the original text, neural coreference response,
+              and NLP coreference information.
+
+    """
+    text: str = data.text
+
+    # Validate input text
     if len(text) < 1:
         return {"msg": "No text provided"}
 
+    # Process the text with SpaCy
     doc = nlp(text)
-    response = {"msg": "Success", "text": text}
+    response: dict = {"msg": "Success", "text": text}
+
+    # Check for neuralcoref coreferences
     if doc._.has_coref:
-        neural_response =  get_neural_reference_resolved(doc)
+        neural_response: dict = get_neural_reference_resolved(doc)
         response["neural_response"] = neural_response
     else:
         response["neural_response"] = {"msg": "No coref found"}
+
+    # Get AllenNLP coreference resolution
     response["nlp_coref"] = get_allennlp_coref(predictor, nlp, text)
+
     return response
 
 
 if __name__ == "__main__":
-    port = os.getenv("PORT", 5000)
-    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "5000"))
+    host = os.getenv("HOST", "127.0.0.1")
     uvicorn.run(app=app, host=host, port=port, log_level="info")

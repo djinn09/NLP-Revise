@@ -1,0 +1,14 @@
+{
+    "cSpell.words": [
+        "allennlp",
+        "coref",
+        "coreference",
+        "coreferences",
+        "huggingface",
+        "NEURALCOREF"
+    ],
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticMode": "workspace",
+    "python.analysis.autoSearchPaths": true,
+    "python.analysis.useLibraryCodeForTypes": true,
+}

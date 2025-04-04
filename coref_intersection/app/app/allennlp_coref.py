@@ -1,12 +1,13 @@
 from allennlp.predictors.predictor import Predictor
+
 from app.intersection import (
     FuzzyIntersectionStrategy,
+    IntersectionStrategy,
     PartialIntersectionStrategy,
     StrictIntersectionStrategy,
-    IntersectionStrategy,
 )
+from app.replace_ import improved_replace_co_refs
 from app.utils import get_span_words
-from app.replace_ import improved_replace_corefs
 
 
 def get_coref_object(path):
@@ -43,7 +44,7 @@ def get_coref_intersection(predictor, nlp, strategy, text):
 
 
 def get_improved_coref(doc, clusters):
-    return improved_replace_corefs(doc, clusters)
+    return improved_replace_co_refs(doc, clusters)
 
 
 def get_cluster_head_idx(doc, cluster):
