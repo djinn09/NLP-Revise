@@ -71,6 +71,7 @@ logger.info("Loading allen-nlp model...")
 # Load the allen-nlp model
 predictor = get_coref_object(setting.ALLEN_NLP_MODEL_URL)
 logger.info("Loaded model allen nlp")
+logger.info(f"Starting server on {setting.HOST}:{setting.PORT}")  # noqa: G004
 
 
 @lru_cache()
@@ -109,7 +110,6 @@ def get_app() -> FastAPI:
 
 app = get_app()
 
-logger.info("Starting server on %s:%s", setting.HOST, setting.PORT)
 
 
 @app.get("/ping")

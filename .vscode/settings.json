@@ -1,11 +1,15 @@
 {
     "cSpell.words": [
         "allennlp",
+        "Bhonsale",
+        "Chhatrapati",
         "coref",
         "coreference",
         "coreferences",
+        "Deepika",
         "huggingface",
-        "NEURALCOREF"
+        "NEURALCOREF",
+        "Shivaji"
     ],
     "python.analysis.typeCheckingMode": "basic",
     "python.analysis.diagnosticMode": "workspace",
