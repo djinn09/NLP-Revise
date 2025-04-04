@@ -137,6 +137,8 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
+*.gz
+
 Text-generation/training_pt/checkpoint
 Text-generation/training_pt/cp.ckpt.data-00000-of-00001
 Text-generation/training_pt/cp.ckpt.index
