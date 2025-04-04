@@ -84,6 +84,7 @@ def get_app() -> FastAPI:
         FastAPI: The configured FastAPI application instance.
 
     """
+    logger.info("Creating FastAPI application...")
     server = FastAPI(
         title=setting.app_name,
         debug=setting.DEBUG,
@@ -91,6 +92,7 @@ def get_app() -> FastAPI:
         port=setting.PORT,
         host=setting.HOST,
     )
+    logger.info("FastAPI application created.")
 
     @server.get("/")
     async def root_get() -> RedirectResponse:
@@ -106,6 +108,8 @@ def get_app() -> FastAPI:
 
 
 app = get_app()
+
+logger.info("Starting server on %s:%s", setting.HOST, setting.PORT)
 
 
 @app.get("/ping")
@@ -155,6 +159,8 @@ async def coref(data: RequestBody) -> dict:
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "5000"))
-    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", setting.PORT))
+    host = os.getenv("HOST", setting.HOST)
+    logger.info("Starting server on %s:%s", host, port)
+    # Start the server
     uvicorn.run(app=app, host=host, port=port, log_level="info")

@@ -59,7 +59,7 @@ def improved_replace_co_refs(document, clusters):
 
 
 def original_replace_corefs(document: Doc, clusters: List[List[List[int]]]) -> str:
-    resolved = list(tok.text_with_ws for tok in document)
+    resolved = [tok.text_with_ws for tok in document]
 
     for cluster in clusters:
         mention_start, mention_end = cluster[0][0], cluster[0][1] + 1

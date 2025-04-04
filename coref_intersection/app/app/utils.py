@@ -2,8 +2,17 @@ from app.intersection import IntersectionStrategy
 
 
 def get_span_words(span, document):
-    return " ".join(document[span[0] : span[1] + 1])
+    """Return a string consisting of the words in the given span.
 
+    Args:
+        span (List[int]): A list of two integers representing the start and end of the span.
+        document (List[str]): A list of the words in the document.
+
+    Returns:
+        str: A string consisting of the words in the given span.
+
+    """
+    return " ".join(document[span[0] : span[1] + 1])
 
 def get_neural_reference_resolved(doc):
 
