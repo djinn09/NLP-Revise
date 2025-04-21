@@ -6,6 +6,7 @@ WORKDIR $HOME
 # set environment variables
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
+ENV NEURALCOREF_CACHE $HOME/neuralcoref
 RUN addgroup --system app && adduser --system app && adduser app app
 
 

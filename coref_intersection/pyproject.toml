@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "coref_intersection"
+version = "0.1.0"
+description = "Coreference resolution API using SpaCy, NeuralCoref, and AllenNLP."
+authors = ["djinn"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "3.7.13"
+fastapi = "^0.95.2"
+uvicorn = "^0.22.0"
+spacy = "^3.5.0"
+neuralcoref = { version = "^4.0", allow-prereleases = true }
+allennlp = "^2.10.1"
+pydantic = "^1.10.2"
+
+[tool.poetry.dev-dependencies]
+ruff = "^0.11.3"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 120
+select = ["E", "F", "W", "C90"]
+ignore = ["E501"]
+target-version = "py37"

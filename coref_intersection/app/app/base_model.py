@@ -1,3 +1,12 @@
+"""Module defines the data models and settings for the Coreference Resolution API.
+
+It includes:
+- RequestBody: Model for the API request body.
+- ResponseBody: Model for the API response body.
+- Settings: Configuration settings for the API.
+- get_settings: Function to retrieve cached settings.
+"""
+
 from __future__ import annotations
 
 import os
@@ -29,10 +38,10 @@ class Settings(BaseSettings):
 class ResponseBody(BaseModel):
     """Response body for the API."""
 
-    error: Optional[str] = None  # noqa: UP007
-    text: Optional[str] = None  # noqa: UP007
-    neural_cluster: Optional[List[str]] = None  # noqa: UP007
-    coref_cluster: Optional[List[str]] = None  # noqa: UP007
+    error: Optional[str] = None
+    text: Optional[str] = None
+    neural_cluster: Optional[List[str]] = None
+    coref_cluster: Optional[List[str]] = None
 
 
 @lru_cache()
