@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from copy import deepcopy
-from typing import TYPE_CHECKING, List, Tuple
+from typing import TYPE_CHECKING, Any, List, Tuple
 
 if TYPE_CHECKING:
     from spacy.tokens import Doc, Span
@@ -46,7 +46,7 @@ class IntersectionStrategy(ABC):
 
     """
 
-    def __init__(self, allen_model, hugging_model):
+    def __init__(self, allen_model: Any, hugging_model: Any) -> None:
         """Initialize an IntersectionStrategy instance.
 
         Args:
@@ -235,7 +235,7 @@ class IntersectionStrategy(ABC):
 
         """
         list_of_clusters = []
-        for cluster in self.doc._.coref_clusters:
+        for cluster in self.doc._.coref_clusters: # type: ignore
             list_of_clusters.append([])
             for span in cluster:
                 list_of_clusters[-1].append([span[0].i, span[-1].i])

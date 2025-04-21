@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Any, List
 from allennlp.predictors.predictor import Predictor
 
 from app.intersection import (
@@ -10,13 +12,37 @@ from app.replace_ import improved_replace_co_refs
 from app.utils import get_span_words
 
 
-def get_coref_object(path):
+def get_coref_object(path: str) -> Predictor:
+    """
+    Creates a coreference resolution predictor from a specified model path.
+
+    Args:
+        path: The file path to the coreference resolution model.
+
+    Returns:
+        An AllenNLP predictor for performing coreference resolution.
+    """
     predictor = Predictor.from_path(path)
     return predictor
 
 
-def get_coref_prediction(predictor, text):
-    prediction = predictor.predict(document=text)
+def get_coref_prediction(
+    predictor: Predictor, text: str
+) -> tuple[list[tuple[str, list[str]]], str, list[list[list[int]]]]:
+    """
+    Makes a prediction with the provided coreference resolution model.
+
+    Args:
+        predictor (Predictor): The AllenNLP predictor for performing coreference resolution.
+        text (str): The text to be processed by the predictor.
+
+    Returns:
+        tuple: A tuple containing:
+            - list of tuples: Each tuple contains a string representing the head of the cluster and a list of strings for each span in the cluster.
+            - str: The resolved coreference text.
+            - list of lists: The raw clusters of indices.
+    """
+    prediction = predictor.predict(document=text) # type: ignore
     document, clusters = prediction["document"], prediction["clusters"]
     clusters = [
         (
@@ -26,21 +52,38 @@ def get_coref_prediction(predictor, text):
         for cluster in clusters
         if len(cluster) > 1
     ]
-    coref_res = predictor.coref_resolved(text)
+    coref_res = predictor.coref_resolved(text) # type: ignore
 
     return clusters, coref_res, prediction["clusters"]
 
 
-def get_coref_intersection(predictor, nlp, strategy, text):
+def get_coref_intersection(
+    predictor: Predictor,
+    nlp: Any,
+    strategy: str,
+    text: str,
+) -> List[List[List[int]]]:
+    """
+    Gets the intersected clusters between the AllenNLP and Huggingface coreference resolution models.
+
+    Args:
+        predictor (Predictor): The AllenNLP predictor for performing coreference resolution.
+        nlp (Language): The Huggingface language model for performing coreference resolution.
+        strategy (str): The strategy to use for intersecting the clusters. Can be "strict", "partial", or "fuzzy".
+        text (str): The text to be processed by the predictor.
+
+    Returns:
+        List[List[List[int]]]: The intersected clusters between the two models.
+    """
     if strategy == "strict":
-        strategy = StrictIntersectionStrategy(predictor, nlp)
+        strategy_obj = StrictIntersectionStrategy(predictor, nlp)
     elif strategy == "partial":
-        strategy = PartialIntersectionStrategy(predictor, nlp)
+        strategy_obj = PartialIntersectionStrategy(predictor, nlp)
     elif strategy == "fuzzy":
-        strategy = FuzzyIntersectionStrategy(predictor, nlp)
+        strategy_obj = FuzzyIntersectionStrategy(predictor, nlp)
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
-    return strategy.clusters(text)
+    return strategy_obj.clusters(text)
 
 
 def get_improved_coref(doc, clusters):
@@ -78,15 +121,9 @@ def get_allennlp_coref(predictor, nlp, text):
         "clusters": clusters,
         "coref_res": coref_res,
         "improved_coref_res": get_improved_coref(doc, int_clusters),
-        "strict": get_clusters(
-            doc, get_coref_intersection(predictor, nlp, "strict", text)
-        ),
-        "partial": get_clusters(
-            doc, get_coref_intersection(predictor, nlp, "partial", text)
-        ),
-        "fuzzy": get_clusters(
-            doc, get_coref_intersection(predictor, nlp, "fuzzy", text)
-        ),
+        "strict": get_clusters(doc, get_coref_intersection(predictor, nlp, "strict", text)),
+        "partial": get_clusters(doc, get_coref_intersection(predictor, nlp, "partial", text)),
+        "fuzzy": get_clusters(doc, get_coref_intersection(predictor, nlp, "fuzzy", text)),
     }
 
 
