@@ -585,26 +585,28 @@ def extract_string_similarity_vector(original: str, compare_text: str) -> dict[s
         seq = difflib.SequenceMatcher(None, s1, s2)
         result.update(
             {
-                "levenshtein": normalized_levenshtein.similarity(s1, s2),
+                "normalized_levenshtein": normalized_levenshtein.similarity(s1, s2),
                 "jaro_winkler": jaro_winkler.similarity(s1, s2),
-                "rfuzz_jaro_similarity": rapidfuzz.distance.JaroWinkler.distance(s1, s2),
-                "metric_lcs": metric_lcs.distance(s1, s2),
-                "qgram2": qgram2.distance(s1, s2),
-                "qgram3": qgram3.distance(s1, s2),
-                "qgram4": qgram4.distance(s1, s2),
-                "jaccard": jaccard.similarity(s1, s2),
-                "cosine_similarity": sim_cosine.similarity(s1, s2),
-                "partial_ratio": rapidfuzz.fuzz.partial_ratio(s1, s2),
-                "partial_token_set_ratio": rapidfuzz.fuzz.partial_token_set_ratio(s1, s2),
-                "partial_token_sort_ratio": rapidfuzz.fuzz.partial_token_sort_ratio(s1, s2),
-                "token_set_ratio": rapidfuzz.fuzz.token_set_ratio(s1, s2),
-                "token_sort_ratio": rapidfuzz.fuzz.token_sort_ratio(s1, s2),
-                "q_ratio": rapidfuzz.fuzz.QRatio(s1, s2),
-                "unicode_q_ratio": fuzzy.UQRatio(s1, s2),
-                "unicode_w_ratio": fuzzy.UWRatio(s1, s2),
-                "fuzz_ratio": rapidfuzz.fuzz.QRatio(s1, s2),
-                "w_ratio": rapidfuzz.fuzz.WRatio(s1, s2),
-                "sequence_match_ratio": seq.ratio(),
+                # "rfuzz_jaro_similarity": rapidfuzz.distance.JaroWinkler.distance(s1, s2),
+                "metric_lcs_similarity": 1 - metric_lcs.distance(s1, s2),
+                "qgram2_similarity": qgram2.distance(s1, s2),
+                "qgram3_similarity": qgram3.distance(s1, s2),
+                "qgram4_similarity": qgram4.distance(s1, s2),
+                "jaccard_char_2gram": jaccard.similarity(s1, s2),
+                "cosine_char_2gram": sim_cosine.similarity(s1, s2),
+                "rfuzz_partial_ratio": rapidfuzz.fuzz.partial_ratio(s1, s2) / 100.0,
+                "rfuzz_partial_token_set_ratio": rapidfuzz.fuzz.partial_token_set_ratio(s1, s2) / 100.0,
+                "rfuzz_partial_token_sort_ratio": rapidfuzz.fuzz.partial_token_sort_ratio(s1, s2) / 100.0,
+                "rfuzz_token_set_ratio": rapidfuzz.fuzz.token_set_ratio(s1, s2) / 100.0,
+                "rfuzz_token_sort_ratio": rapidfuzz.fuzz.token_sort_ratio(s1, s2) / 100.0,
+                "rfuzz_qratio": rapidfuzz.fuzz.QRatio(s1, s2) / 100.0,
+                "rfuzz_ratio": rapidfuzz.fuzz.ratio(s1, s2) / 100.0,
+                "rfuzz_wratio": rapidfuzz.fuzz.WRatio(s1, s2) / 100.0,
+                "fz_uqratio": fuzzy.UQRatio(s1, s2) / 100.0,
+                "fz_uwratio": fuzzy.UWRatio(s1, s2) / 100.0,
+                "ratio": seq.ratio(),
+                "quick_ratio": seq.quick_ratio(),
+                "real_quick_ratio": seq.real_quick_ratio(),
             },
         )
     except Exception:  # noqa: BLE001, S110
@@ -631,24 +633,24 @@ def extract_string_similarity_vector(original: str, compare_text: str) -> dict[s
         tfidf = TFIDF(s1, s2)
         result.update(
             {
-                "cosine_distance": tfidf.calculate_distance("cosine"),
-                "euclidean_distance": tfidf.calculate_distance("euclidean"),
-                "manhattan_distance": tfidf.calculate_distance("manhattan"),
-                "minkowski_distance": tfidf.calculate_distance("minkowski"),
-                "jaccard_distance": tfidf.calculate_distance("jaccard"),
-                "hamming_distance": tfidf.calculate_distance("hamming"),
-            }
+                "tfidf_cosine_similarity": tfidf.calculate_distance("cosine"),
+                "tfidf_euclidean_distance": tfidf.calculate_distance("euclidean"),
+                "tfidf_manhattan_distance": tfidf.calculate_distance("manhattan"),
+                "tfidf_minkowski_distance": tfidf.calculate_distance("minkowski"),
+                "tfidf_jaccard_similarity": tfidf.calculate_distance("jaccard"),
+                "tfidf_hamming_distance": tfidf.calculate_distance("hamming"),
+            },
         )
     except Exception:
         result.update(
             {
-                "cosine_distance": None,
-                "euclidean_distance": None,
-                "manhattan_distance": None,
-                "minkowski_distance": None,
-                "jaccard_distance": None,
-                "hamming_distance": None,
-            }
+                "tfidf_cosine_similarity": None,
+                "tfidf_euclidean_distance": None,
+                "tfidf_manhattan_distance": None,
+                "tfidf_minkowski_distance": None,
+                "tfidf_jaccard_similarity": None,
+                "tfidf_hamming_distance": None,
+            },
         )
 
     return result
@@ -656,10 +658,13 @@ def extract_string_similarity_vector(original: str, compare_text: str) -> dict[s
 
 if __name__ == "__main__":
     # Example usage
-    original_text = "This is a sample text."
-    compare_text = "This is a sample text for comparison."
+    original_text = "The quick brown fox jumps over the lazy dog."
+    compare_text = "A fast brown fox leaped over the sleepy dog"
     similarity_vector = extract_string_similarity_vector(original_text, compare_text)
-    print(similarity_vector)  # noqa: T201
     # Output: A dictionary containing various similarity metrics and their scores
     # Note: The output will vary based on the input texts and the similarity metrics used.
     # You can adjust the original_text and compare_text variables to test different cases.
+    print("\nSimilarity (Original vs. Similar):")
+    for k in sorted(similarity_vector.keys()):
+        v = similarity_vector[k]
+        print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
