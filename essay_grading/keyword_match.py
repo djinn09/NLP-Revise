@@ -546,7 +546,7 @@ class BleuScorer:
                     weights=weights,
                     smoothing_function=self.smoothing,
                 )
-                cumulative_scores[n] = ngram_score  # No need for float() cast
+                cumulative_scores[n] = ngram_score  # type: ignore # No need for float() cast  # noqa: PGH003
 
             # Calculate overall score using uniform weights across all considered n-grams
             uniform_weights = tuple(1.0 / max_n for _ in range(max_n))
@@ -575,68 +575,83 @@ class BleuScorer:
 
 
 def extract_string_similarity_vector(original: str, compare_text: str) -> dict[str, float]:
-    """Extract various string similarity metrics between two texts.
-
-    Parameters
-    ----------
-    original : str
-        The original text to compare.
-    compare_text : str
-        The text to compare against the original.
-
-    Returns
-    -------
-    dict[str, float]
-        A dictionary containing similarity metrics and their respective scores.
-
-    """
-    print("Extracting string similarity vector...")  # noqa: T201
-    # Initialize the similarity metrics
-
+    """Extract various string similarity metrics between two texts."""
     s1 = original.lower()
     s2 = compare_text.lower()
-    print(f"Original: {s1}")  # noqa: T201
-    print(f"Compare: {s2}")  # noqa: T201
-    # Initialize the similarity metrics
-    seq = difflib.SequenceMatcher(None, s1, s2)
+    result = {}
 
-    bm25 = BM25([s1.split()])
-    tokenized_query = s2.split()
-    doc_scores = bm25.get_scores(tokenized_query)
-    # Initialize the TF-IDF vectorizer
-    tfidf = TFIDF(s1, s2)
-    scorer = BleuScorer()
+    # Basic similarity metrics
+    try:
+        seq = difflib.SequenceMatcher(None, s1, s2)
+        result.update(
+            {
+                "levenshtein": normalized_levenshtein.similarity(s1, s2),
+                "jaro_winkler": jaro_winkler.similarity(s1, s2),
+                "rfuzz_jaro_similarity": rapidfuzz.distance.JaroWinkler.distance(s1, s2),
+                "metric_lcs": metric_lcs.distance(s1, s2),
+                "qgram2": qgram2.distance(s1, s2),
+                "qgram3": qgram3.distance(s1, s2),
+                "qgram4": qgram4.distance(s1, s2),
+                "jaccard": jaccard.similarity(s1, s2),
+                "cosine_similarity": sim_cosine.similarity(s1, s2),
+                "partial_ratio": rapidfuzz.fuzz.partial_ratio(s1, s2),
+                "partial_token_set_ratio": rapidfuzz.fuzz.partial_token_set_ratio(s1, s2),
+                "partial_token_sort_ratio": rapidfuzz.fuzz.partial_token_sort_ratio(s1, s2),
+                "token_set_ratio": rapidfuzz.fuzz.token_set_ratio(s1, s2),
+                "token_sort_ratio": rapidfuzz.fuzz.token_sort_ratio(s1, s2),
+                "q_ratio": fuzz.QRatio(s1, s2),
+                "uq_ratio": fuzzy.UQRatio(s1, s2),
+                "uw_ratio": fuzzy.UWRatio(s1, s2),
+                "fuzz_ratio": fuzz.ratio(s1, s2),
+                "w_ratio": fuzz.WRatio(s1, s2),
+                "sequence_match_ratio": seq.ratio(),
+            },
+        )
+    except Exception:  # noqa: BLE001, S110
+        pass  # Optionally log the error
 
-    return {
-        "levenshtein": normalized_levenshtein.similarity(s1, s2),
-        "jaro_winkler": jaro_winkler.similarity(s1, s2),
-        "jaro_similarity": rapidfuzz.distance.JaroWinkler.distance(s1, s2),
-        "metric_lcs": metric_lcs.distance(s1, s2),
-        "qgram2": qgram2.distance(s1, s2),
-        "qgram3": qgram3.distance(s1, s2),
-        "qgram4": qgram4.distance(s1, s2),
-        "jaccard": jaccard.similarity(s1, s2),
-        "cosine": sim_cosine.similarity(s1, s2),
-        "partial_ratio": rapidfuzz.fuzz.partial_ratio(s1, s2),
-        "partial_token_set_ratio": rapidfuzz.fuzz.partial_token_set_ratio(s1, s2),
-        "partial_token_sort_ratio": rapidfuzz.fuzz.partial_token_sort_ratio(s1, s2),
-        "token_set_ratio": rapidfuzz.fuzz.token_set_ratio(s1, s2),
-        "token_sort_ratio": rapidfuzz.fuzz.token_sort_ratio(s1, s2),
-        "QRatio": fuzz.QRatio(s1, s2),
-        "UQRatio": fuzzy.UQRatio(s1, s2),
-        "UWRatio": fuzzy.UWRatio(s1, s2),
-        "fuzzwuzzy": fuzz.ratio(s1, s2),
-        "WRatio": fuzz.WRatio(s1, s2),
-        "seq_match": seq.ratio(),
-        "bleu_score": scorer.score_all_ngrams(s1, s2).score,
-        "bm25": doc_scores[0],
-        "Cosine": tfidf.calculate_distance("cosine"),
-        "Euclidean": tfidf.calculate_distance("euclidean"),
-        "Manhattan": tfidf.calculate_distance("manhattan"),
-        "Minkowski": tfidf.calculate_distance("minkowski"),
-        "Jaccard": tfidf.calculate_distance("jaccard"),
-        "Hamming": tfidf.calculate_distance("hamming"),
-    }
+    # BLEU Score
+    try:
+        scorer = BleuScorer()
+        result["bleu_score"] = scorer.score_all_ngrams(s1, s2).score
+    except Exception:  # noqa: BLE001
+        result["bleu_score"] = None
+
+    # BM25 Score
+    try:
+        bm25 = BM25([s1.split()])
+        tokenized_query = s2.split()
+        doc_scores = bm25.get_scores(tokenized_query)
+        result["bm25"] = doc_scores[0] if doc_scores else None
+    except Exception:  # noqa: BLE001
+        result["bm25"] = None
+
+    # TF-IDF and vector distance metrics
+    try:
+        tfidf = TFIDF(s1, s2)
+        result.update(
+            {
+                "cosine_distance": tfidf.calculate_distance("cosine"),
+                "euclidean_distance": tfidf.calculate_distance("euclidean"),
+                "manhattan_distance": tfidf.calculate_distance("manhattan"),
+                "minkowski_distance": tfidf.calculate_distance("minkowski"),
+                "jaccard_distance": tfidf.calculate_distance("jaccard"),
+                "hamming_distance": tfidf.calculate_distance("hamming"),
+            }
+        )
+    except Exception:
+        result.update(
+            {
+                "cosine_distance": None,
+                "euclidean_distance": None,
+                "manhattan_distance": None,
+                "minkowski_distance": None,
+                "jaccard_distance": None,
+                "hamming_distance": None,
+            }
+        )
+
+    return result
 
 
 if __name__ == "__main__":
