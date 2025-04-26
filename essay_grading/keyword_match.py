@@ -7,8 +7,9 @@ import re
 import string
 from collections import Counter
 from itertools import zip_longest
-from typing import Callable
-
+from typing import Callable, List, Optional, Tuple
+from regex import P
+from scipy.sparse import csr_matrix
 import nltk
 import rapidfuzz
 from fuzzywuzzy import fuzz as fuzzy
@@ -45,7 +46,6 @@ from sklearn.metrics.pairwise import (
 #     nltk.download("punkt_tab")
 
 
-
 stemmer = PorterStemmer()
 word_net_lemmatizer = WordNetLemmatizer()  # Create WordNet lemmatizer
 remove_punctuation_map = {ord(char): None for char in string.punctuation}
@@ -66,18 +66,22 @@ SPECIAL_CHARS_REMOVE_PATTERN = r'[-()"#/@&^*();:<>{}`+=~|!?,]'  # Pattern to rem
 
 
 class TFIDF:
-    """A class to compute TF-IDF-based similarity between two texts.
+    """Compute TF-IDF based similarity or distance metrics between two texts.
 
     Attributes
     ----------
     original : str
-        The original text to compare.
+        The original text for comparison.
     compare_text : str
         The text to compare against the original.
-    lemmatization : bool, optional
-        Whether to use lemmatization for text normalization (default is False).
-    without_normalized : bool, optional
-        Whether to skip normalization during vectorization (default is False).
+    without_normalized : bool
+        If True, skip custom normalization and use regex token pattern.
+    lemmatizer : Callable
+        The NLTK lemmatizer used for lemmatization.
+    normalize : Optional[Callable]
+        The normalization function (stem or lemma) or None if skipped.
+    vectorizer_ : TfidfVectorizer
+        The configured TF-IDF vectorizer.
 
     Methods
     -------
@@ -103,160 +107,226 @@ class TFIDF:
         *,
         lemmatization: bool = False,
         without_normalized: bool = False,
+        lemmatizer: Optional[Callable] = None,
     ) -> None:
-        """Initialize a TFIDF instance.
+        """Initialize the TFIDF instance.
 
         Parameters
         ----------
         original : str
-            The original text to compare.
+            The original text.
         compare_text : str
-            The text to compare against the original.
+            The text to compare.
         lemmatization : bool, optional
-            Whether to use lemmatization for text normalization (default is False).
+            If True, use lemmatization for normalization (default False).
         without_normalized : bool, optional
-            Whether to skip normalization during vectorization (default is False).
+            If True, skip custom normalization (default False).
+        lemmatizer : Callable, optional
+            Custom lemmatizer to use (default uses WordNetLemmatizer).
 
         """
-        self.normalize = self.lemma_normalize if lemmatization else self.stem_normalize
         self.original = original
         self.compare_text = compare_text
         self.without_normalized = without_normalized
 
-    def lemmatize_tokens(self, tokens: list[str], lemmatizer: Callable = word_net_lemmatizer) -> list[str]:
-        """Apply lemmatization to the given list of tokens.
+        # Assign the lemmatizer instance (default if none provided)
+        self.lemmatizer = lemmatizer or word_net_lemmatizer
 
-        Parameters
-        ----------
-        tokens : list[str]
-            The list of tokens to lemmatize.
-        lemmatizer : callable, optional
-            The lemmatizer to use (default is `nltk.stem.WordNetLemmatizer()`).
+        # Decide on normalization: stem, lemma, or None (if skipped)
+        if not without_normalized:
+            self.normalize = self.lemma_normalize if lemmatization else self.stem_normalize
+        else:
+            self.normalize = None
 
-        Returns
-        -------
-        lemmatized_tokens : list[str]
-            The lemmatized tokens.
+        # Create and cache the TF-IDF vectorizer
+        self.vectorizer_ = self._create_vectorizer()
 
-        """
-        return [lemmatizer.lemmatize(tok_en) for tok_en in tokens]  # Apply lemmatization
-
-    @staticmethod
-    def stem_normalize(text: str) -> list[str]:
-        """Normalize text by stemming tokens and removing punctuation.
+    def _basic_tokenize(self, text: str) -> List[str]:
+        """Lowercase, remove punctuation, and tokenize the text.
 
         Parameters
         ----------
         text : str
-            The input text to normalize.
+            Raw input text.
 
         Returns
         -------
-        list[str]
-            A list of stemmed tokens from the input text.
+        List[str]
+            List of word tokens.
 
         """
-        tokens = nltk.word_tokenize(text.lower().translate(remove_punctuation_map))
-        return [stemmer.stem(item) for item in tokens]
+        # Remove punctuation and tokenize
+        return nltk.word_tokenize(text.lower().translate(remove_punctuation_map))
 
-    @staticmethod
-    def lemma_normalize(text: str) -> list[str]:
-        """Normalize text by lemmatizing tokens and removing punctuation.
+    def stem_normalize(self, text: str) -> List[str]:
+        """Normalize text by stemming tokens.
 
         Parameters
         ----------
         text : str
-            The input text to normalize.
+            Input text to normalize.
 
         Returns
         -------
-        list[str]
-            A list of lemmatized tokens from the input text.
+        List[str]
+            List of stemmed tokens.
 
         """
-        tokens = nltk.word_tokenize(text.lower().translate(remove_punctuation_map))
+        tokens = self._basic_tokenize(text)
+        # Apply Porter stemmer to each token
+        return [stemmer.stem(token) for token in tokens]
 
-        return [lemmatizer.lemmatize(tok_en) for tok_en in tokens]
+    def lemma_normalize(self, text: str) -> List[str]:
+        """Normalize text by lemmatizing tokens.
 
-    def vectorizer(self, *, without_normalized: bool = True) -> TfidfVectorizer:
-        """Create a TF-IDF vectorizer based on the normalization setting.
+        Parameters
+        ----------
+        text : str
+            Input text to normalize.
 
-        - without_normalized=True: use regex tokenization only.
-        - without_normalized=False: use the custom normalize() tokenizer.
+        Returns
+        -------
+        List[str]
+            List of lemmatized tokens.
+
         """
-        if without_normalized:
+        tokens = self._basic_tokenize(text)
+        # Use the provided lemmatizer instance
+        return [self.lemmatizer.lemmatize(token) for token in tokens]
+
+    def _create_vectorizer(self) -> TfidfVectorizer:
+        """Create the TF-IDF vectorizer based on normalization settings.
+
+        Returns
+        -------
+        TfidfVectorizer
+            Configured vectorizer (with custom tokenizer or token pattern).
+
+        """
+        if self.without_normalized:
+            # Use default regex pattern for tokenization
             token_pattern = os.getenv("TOKEN_PATTERN", r"\w+")
-            # Only token_pattern, no tokenizer
-            return TfidfVectorizer(token_pattern=token_pattern, tokenizer=None)
-        # Only tokenizer, no token_pattern
-        return TfidfVectorizer(tokenizer=self.normalize, token_pattern=None)
+            return TfidfVectorizer(token_pattern=token_pattern)
+        # Use custom normalize function
+        return TfidfVectorizer(tokenizer=self.normalize, token_pattern=None)  # type: ignore  # noqa: PGH003
 
-    def fit(self):
-        """Fit the TF-IDF vectorizer on the original and comparison texts.
+    def fit(self) -> csr_matrix:
+        """Fit the TF-IDF vectorizer on the original and compare texts.
 
         Returns
         -------
-        tfidf : scipy.sparse.csr.csr_matrix
-            The TF-IDF matrix of the original and comparison texts.
+        scipy.sparse.csr_matrix
+            TF-IDF matrix for both texts.
 
         """
-        vectorizer: TfidfVectorizer = self.vectorizer(without_normalized=self.without_normalized)
-        return vectorizer.fit_transform([self.original, self.compare_text])
+        result = self.vectorizer_.fit_transform([self.original, self.compare_text])
+        if not isinstance(result, csr_matrix):
+            msg = "Expected csr_matrix but got {type(result).__name__}"
+            raise TypeError(msg)
+        return result
 
-    def calculate_distance(self, metric: str) -> float:
-        """Calculate the similarity or distance between the original and comparison texts.
-
-        Parameters
-        ----------
-        metric : str
-            The metric to use for calculating distance. Supported values are "cosine",
-            "euclidean", "manhattan", "minkowski", "jaccard", and "hamming".
+    def get_normalized_tokens(self) -> Tuple[List[str], List[str]]:
+        """Get normalized token lists for debugging or testing.
 
         Returns
         -------
-        float
-            The calculated similarity or distance value.
+        Tuple[List[str], List[str]]
+            Normalized tokens of original and compare_text.
 
         Raises
         ------
         ValueError
-            If an invalid metric is provided.
+            If normalization is disabled.
+
+        """
+        if not self.normalize:
+            msg = "Normalization is disabled."
+            raise ValueError(msg)
+        return (self.normalize(self.original), self.normalize(self.compare_text))
+
+    def calculate_distance(self, metric: str) -> float:
+        """Compute the specified similarity/distance metric between texts.
+
+        Parameters
+        ----------
+        metric : str
+            One of 'cosine', 'euclidean', 'manhattan', 'minkowski', 'jaccard', 'hamming'.
+
+        Returns
+        -------
+        float
+            The computed similarity or distance.
+
+        Raises
+        ------
+        ValueError
+            If an unsupported metric is provided.
 
         """
         tfidf = self.fit()
-        if metric == "cosine":
-            print("Calculating TFIDF cosine similarity...")  # noqa: T201
-            return cosine_similarity(tfidf[0], tfidf[1])[0][0]
-        if metric in ("euclidean", "manhattan", "minkowski"):
-            print(f"Calculating TFIDF {metric} distance...")
-            return pairwise_distances(tfidf.toarray(), metric=metric)[0, 1]
-        if metric == "jaccard":
-            print("Calculating TFIDF jaccard distance...")
-            tokens1 = set(self.normalize(self.original))
-            tokens2 = set(self.normalize(self.compare_text))
-            common_tokens = list(tokens1.intersection(tokens2))
-            score = jaccard_score(common_tokens, common_tokens, average="micro")
-            return float(score) if isinstance(score, (int, float)) else score.item()
-        if metric == "hamming":
-            print("Calculating TFIDF hamming distance...")
-            # Get the longer sentence length
-            sentence1 = self.original
-            sentence2 = self.compare_text
+        m = metric.lower()
+        if m not in ("cosine", "euclidean", "manhattan", "minkowski", "jaccard", "hamming"):
+            msg = f"Unsupported metric: {metric}"
+            raise ValueError(msg)
+        if m == "cosine":
+            print("TFIDF Cosine similarity")  # noqa: T201
+            # Cosine similarity in [0,1]
+            # Compute full pairwise cosine similarity matrix (2x2)
+            sim_matrix = cosine_similarity(tfidf)
+            # Return similarity between text0 and text1
+            return float(sim_matrix[0, 1])
 
-            max_length = max(len(sentence1), len(sentence2))
+        if m in {"euclidean", "manhattan", "minkowski"}:
+            # Pairwise distances from TF-IDF vectors
+            return float(pairwise_distances(tfidf.toarray(), metric=m)[0, 1])
 
-            # Create empty dictionaries to store character counts
-            char_counts1 = Counter(list(sentence1))
-            char_counts2 = Counter(list(sentence2))
+        if m == "jaccard":
+            # Summarizing my current belief:
+            # - Micro-Jaccard: good if you want a "how much vocab overlaps" score.
+            # - Weighted-Jaccard: better for longer texts where important words matter more.
+            # - Macro-Jaccard: risky and too noisy.
+            # - Binary-Jaccard: acceptable if TF-IDF already filtered out unimportant words.
+            # Compute Jaccard distance using sklearn's jaccard_score
+            print("TFIDF Jaccard distance...")  # noqa: T201
+            # Convert TF-IDF sparse matrix to binary presence matrix
+            dense = tfidf.toarray()
+            presence = (dense > 0).astype(int)
+            # jaccard_score returns similarity; subtract from 1 to get distance
+            # score = jaccard_score(presence[0], presence[1], average="micro")
+            # print(f"micro-Jaccard score: {score}")
+            # score = jaccard_score(presence[0], presence[1], average="macro")
+            # print(f"macro-Jaccard score: {score}")
+            score = jaccard_score(presence[0], presence[1], average="weighted")
+            # score = jaccard_score(presence[0], presence[1], average="binary")
+            # print(f"binary-Jaccard score: {score}")
 
-            # Calculate the Hamming distance
-            distance = 0
-            for k1, k2 in zip_longest(char_counts1.keys(), char_counts2.keys()):
-                # Consider difference in character occurrences and handle missing characters
-                distance += abs(char_counts1.get(k1, 0) - char_counts2.get(k2, 0))
-            return distance / max_length
-        msg = "Invalid metric"
-        raise ValueError(msg)
+            return 1.0 - float(score)
+
+        if m == "hamming":
+            print("Hamming distance")  # noqa: T201
+            # Character histogram distance normalized by max length
+            c1, c2 = Counter(self.original), Counter(self.compare_text)
+            all_chars = set(c1) | set(c2)
+            diff_sum = sum(abs(c1[ch] - c2[ch]) for ch in all_chars)
+            max_len = max(len(self.original), len(self.compare_text), 1)
+            return diff_sum / max_len
+
+        return 0.0  # Default case, should not reach here
+
+    def __repr__(self) -> str:
+        """Representation showing lengths and normalization state.
+
+        Returns
+        -------
+        str
+            Informative string representation.
+
+        """
+        return (
+            f"<TFIDF(len_orig={len(self.original)}, "
+            f"len_cmp={len(self.compare_text)}, "
+            f"normalized={self.normalize is not None})>"
+        )
 
 
 class BleuScore:
