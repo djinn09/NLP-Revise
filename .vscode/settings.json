@@ -16,10 +16,12 @@
         "lemmatizer",
         "Lemmatizes",
         "lemmatizing",
+        "Minkowski",
         "NEURALCOREF",
         "Shivaji",
         "stopwords",
         "tfidf",
+        "toarray",
         "vectorizer",
         "winkler"
     ],

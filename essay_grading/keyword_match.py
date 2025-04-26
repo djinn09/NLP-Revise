@@ -6,10 +6,10 @@ import os
 import re
 import string
 from collections import Counter
-from itertools import zip_longest
-from typing import Callable, List, Optional, Tuple
-from regex import P
-from scipy.sparse import csr_matrix
+from dataclasses import dataclass, field
+from functools import lru_cache
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
+
 import nltk
 import rapidfuzz
 from fuzzywuzzy import fuzz as fuzzy
@@ -19,6 +19,7 @@ from nltk.tokenize import word_tokenize
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 from rank_bm25 import BM25L as BM25
 from rapidfuzz import fuzz
+from scipy.sparse import csr_matrix
 from similarity.cosine import Cosine
 from similarity.jaccard import Jaccard
 from similarity.jarowinkler import JaroWinkler
@@ -50,9 +51,11 @@ stemmer = PorterStemmer()
 word_net_lemmatizer = WordNetLemmatizer()  # Create WordNet lemmatizer
 remove_punctuation_map = {ord(char): None for char in string.punctuation}
 
-stop_words = set(stopwords.words("english"))
+STOPWORDS = set(stopwords.words("english"))
 
 
+# Default smoothing method
+DEFAULT_SMOOTHING_FUNCTION = SmoothingFunction().method1
 normalized_levenshtein = NormalizedLevenshtein()
 jaro_winkler = JaroWinkler()
 metric_lcs = MetricLCS()
@@ -329,134 +332,246 @@ class TFIDF:
         )
 
 
-class BleuScore:
-    """A class used to score sentences based on the input keyword or between two strings."""
+@dataclass
+class BleuResult:
+    """Holds BLEU scoring results.
 
-    def pre_process_text(self, text: str) -> list[str]:
-        """Preprocesses the input text by removing special characters, tokenizing words, and lemmatizing them.
+    Attributes:
+        score: The overall cumulative BLEU score (typically BLEU-4 with uniform weights unless specified otherwise).
+        cumulative_ngram_scores: A dictionary mapping n (from 1 to max_n) to the cumulative BLEU-n score.
+                                  For example, key 2 holds the BLEU-2 score (average of 1-gram and 2-gram precision).
+                                  This is populated by `score_all_ngrams`.
+
+    """
+
+    score: float
+    cumulative_ngram_scores: Optional[Dict[int, float]] = field(default=None)
+
+
+class BleuScorer:
+    """Computes BLEU similarity between hypothesis and reference sentences.
+
+    Offers configurable preprocessing (stop words, lemmatization) and
+    NLTK smoothing methods. Handles NLTK data downloads automatically.
+
+    Args:
+        stop_words: Set of words to exclude during preprocessing.
+                      If None, uses default English stopwords from NLTK.
+        lemmatizer: A WordNetLemmatizer instance. If None, uses a default
+                      NLTK WordNetLemmatizer.
+        smoothing_function: NLTK BLEU smoothing method (e.g., SmoothingFunction().method1).
+                              If None, uses method1.
+        ensure_nltk_data: If True (default), attempts to download required NLTK
+                          data ('punkt', 'wordnet', 'stopwords') if not found.
+        nltk_download_dir: Optional path to download NLTK data.
+
+    """
+
+    def __init__(
+        self,
+        stop_words: Optional[Set[str]] = None,
+        lemmatizer: Optional[WordNetLemmatizer] = None,
+        smoothing_function: Optional[Callable] = None,
+    ) -> None:
+        # Lemmatizer and stopwords check/download is handled lazily on first use
+
+        # Assign lemmatizer and stop words, using lazy-loaded defaults if needed
+        self.lemmatizer = lemmatizer or word_net_lemmatizer
+        self.stop_words = stop_words or STOPWORDS
+
+        # Use provided smoothing or default
+        self.smoothing = smoothing_function or DEFAULT_SMOOTHING_FUNCTION
+
+        # Basic configuration logging
+        logging.info(  # noqa: LOG015
+            f"BleuScorer initialized. Stop words: {'Default' if stop_words is None else f'{len(stop_words)} custom'}, "  # noqa: G004
+            f"Lemmatizer: {'Default' if lemmatizer is None else 'Custom'}, "
+            f"Smoothing: {self.smoothing.__name__ if hasattr(self.smoothing, '__name__') else 'Custom Function'}",
+        )
+
+    @lru_cache(maxsize=512)  # Increased cache size slightly  # noqa: B019
+    def _preprocess_text(self, text: str) -> Tuple[str, ...]:
+        """Tokenizes, cleans, lemmatizes, and filters stop words from text.
+
+        Returns a tuple of processed tokens, suitable for caching.
 
         Args:
-            text (str): The input text to preprocess.
+            text: The input sentence string.
 
         Returns:
-            list[str]: A list of lemmatized words from the input text.
+            A tuple of processed token strings.
 
         """
-        text = re.sub(SPECIAL_CHARS_REMOVE_PATTERN, "", text)
         try:
-            # Tokenize words in a sentence
-            word_tokens = word_tokenize(text)
-            # Lemmatization of words
-            return [
-                word_net_lemmatizer.lemmatize(re.sub(SPECIAL_CHARS_REMOVE_PATTERN, "", w))
-                for w in word_tokens
-                if w not in stop_words
+            # 1. Remove special characters and lowercase
+            cleaned = re.sub(SPECIAL_CHARS_REMOVE_PATTERN, "", text.lower())
+            # 2. Tokenize
+            tokens = word_tokenize(cleaned)
+            # 3. Lemmatize and filter stop words
+            processed_tokens = [
+                self.lemmatizer.lemmatize(token)
+                for token in tokens
+                if token.isalnum() and token not in self.stop_words  # Ensure alphanumeric and not stop word
             ]
-        except (ValueError, TypeError):  # type: ignore  # noqa: PGH003
-            logging.exception("Error occurred in text preprocessing")  # noqa: LOG015
-            return []
+            return tuple(processed_tokens)
+        except Exception as e:
+            logging.exception(f"Error during preprocessing text: '{text[:50]}...'. Error: {e}")  # noqa: G004, LOG015, TRY401
+            # Return empty tuple on failure to allow BLEU to compute (likely 0)
+            return ()
 
-    def score_text(self, text1: str, text2: str) -> float:
-        """Compare two sentences and return their BLEU score.
+    def score(
+        self,
+        references: Union[str, Sequence[str]],
+        hypothesis: str,
+        weights: Tuple[float, ...] = (0.25, 0.25, 0.25, 0.25),  # Default BLEU-4
+    ) -> BleuResult:
+        """Compute the cumulative BLEU score with specified n-gram weights.
 
-        Parameters
-        ----------
-        text1 : str
-            The first sentence to compare.
-        text2 : str
-            The second sentence to compare.
+        Args:
+            references: The reference sentence(s). Can be a single string or
+                        a list/tuple of strings.
+            hypothesis: The hypothesis sentence to score.
+            weights: A tuple of weights for n-grams (e.g., (0.25, 0.25, 0.25, 0.25)
+                     for standard BLEU-4). The length determines the maximum n-gram order.
 
-        Returns
-        -------
-        float
-            The BLEU score of the two sentences.
-
-        Notes
-        -----
-        BLEU score is a measure of how similar two sentences are. It is calculated by comparing
-        the n-grams of the two sentences. The BLEU score is a value between 0 and 1, where 1 is
-        a perfect match and 0 indicates no similarity at all.
-
-        """
-        try:
-            # Tokenization and Lemmatization of text1 and text2
-            word_list1 = self.pre_process_text(text1)
-            wordlist2 = self.pre_process_text(text2)
-
-            reference = [word_list1]  # Reference is text1
-            chencherry = SmoothingFunction()
-
-            # Calculate BLEU score
-            return sentence_bleu(reference, wordlist2, smoothing_function=chencherry.method1)
-
-        except (ValueError, TypeError, NltkError):
-            logging.exception("Error occurred in text preprocessing")  # noqa: LOG015
-            return 0.0
-
-    # similarity of subject
-    def score_text_ngram(self, text1: str, text2: str) -> float:
-        """Calculate the BLEU score between two sentences with n-grams.
-
-        Parameters
-        ----------
-        text1 : str
-            The first sentence to compare.
-        text2 : str
-            The second sentence to compare.
-
-        Returns
-        -------
-        float
-            The BLEU score of the two sentences with n-grams between 1 and 4.
-
-        Notes
-        -----
-        BLEU score is a measure of how similar two sentences are. It is calculated by comparing
-        the n-grams of the two sentences. The BLEU score is a value between 0 and 1, where 1 is
-        a perfect match and 0 indicates no similarity at all.
+        Returns:
+            A BleuResult object containing the overall score.
 
         """
+        if isinstance(references, str):
+            reference_list = [references]
+        elif isinstance(references, (list, tuple)):
+            reference_list = references
+        else:
+            msg = "References must be a string or a sequence of strings."
+            raise TypeError(msg)
+
+        if not hypothesis or not reference_list or not any(reference_list):
+            logging.warning("Cannot compute BLEU score with empty reference(s) or hypothesis.")  # noqa: LOG015
+            return BleuResult(score=0.0)
+
         try:
-            # Tokenization and Lemmatization of the keyword
-            keyword_list = self.pre_process_text(text1)
+            # Preprocess hypothesis
+            hyp_tokens: List[str] = list(self._preprocess_text(hypothesis))
 
-            # Tokenization and Lemmatization of the sentences
-            wordlist = self.pre_process_text(text2)
-            reference = [keyword_list]
-            chencherry = SmoothingFunction()
-            # sentence bleu calculates the score based on 1-gram,2-gram,3-gram-4-gram,
-            # and a cumulative of the above is taken as score of the sentence.
-            bleu_score_1 = sentence_bleu(
-                reference,
-                wordlist,
-                weights=(1, 0, 0, 0),
-                smoothing_function=chencherry.method1,
-            )
-            bleu_score_2 = sentence_bleu(
-                reference,
-                wordlist,
-                weights=(0.5, 0.5, 0, 0),
-                smoothing_function=chencherry.method1,
-            )
-            bleu_score_3 = sentence_bleu(
-                reference,
-                wordlist,
-                weights=(0.33, 0.33, 0.34, 0),
-                smoothing_function=chencherry.method1,
-            )
-            bleu_score_4 = sentence_bleu(
-                reference,
-                wordlist,
-                weights=(0.25, 0.25, 0.25, 0.25),
-                smoothing_function=chencherry.method1,
-            )
-            return (
-                4 * float(bleu_score_4) + 3 * float(bleu_score_3) + 2 * float(bleu_score_2) + float(bleu_score_1)
-            ) / 10
+            # Preprocess reference(s)
+            ref_tokens_list: List[List[str]] = [list(self._preprocess_text(ref)) for ref in reference_list]
 
-        except (ValueError, TypeError):
-            logging.exception("Error occurred in score_text_n_gram")  # noqa: LOG015
-            return 0.0
+            # Handle cases where preprocessing results in empty lists
+            if not hyp_tokens or not any(ref_tokens_list):
+                score_value = 0.0
+                if not hyp_tokens:
+                    logging.warning(f"Hypothesis '{hypothesis[:50]}...' became empty after preprocessing.")  # noqa: G004, LOG015
+                if not any(ref_tokens_list):
+                    logging.warning("All references became empty after preprocessing.")  # noqa: LOG015
+
+            else:
+                score_value = sentence_bleu(
+                    ref_tokens_list,
+                    hyp_tokens,
+                    weights=weights,
+                    smoothing_function=self.smoothing,
+                )
+
+            return BleuResult(score=score_value)  # type: ignore  # noqa: PGH003
+
+        except Exception as e:
+            # Log specific inputs that caused the error for easier debugging
+            ref_repr = (
+                f"'{reference_list[0][:50]}...'"
+                if isinstance(reference_list, list) and reference_list
+                else str(reference_list)
+            )
+            hyp_repr = f"'{hypothesis[:50]}...'"
+            logging.exception(  # noqa: LOG015
+                f"Error computing BLEU score for refs: {ref_repr} and hyp: {hyp_repr}. Weights: {weights}",  # noqa: G004
+                exc_info=e,  # Log the full traceback
+            )
+            return BleuResult(score=0.0)  # Return 0 score on failure
+
+    def score_all_ngrams(
+        self,
+        references: Union[str, Sequence[str]],
+        hypothesis: str,
+        max_n: int = 4,
+    ) -> BleuResult:
+        """Compute cumulative BLEU scores for each n-gram order up to max_n, plus an overall score using uniform weights up to max_n.
+
+        Args:
+            references: The reference sentence(s). Can be a single string or
+                        a list/tuple of strings.
+            hypothesis: The hypothesis sentence.
+            max_n: The maximum n-gram size to evaluate (default 4).
+
+        Returns:
+            A BleuResult containing the overall score (uniform weights up to max_n)
+            and a dictionary `cumulative_ngram_scores` mapping n (1 to max_n)
+            to the cumulative BLEU-n score.
+
+        """  # noqa: E501
+        if isinstance(references, str):
+            reference_list = [references]
+        elif isinstance(references, (list, tuple)):
+            reference_list = references
+        else:
+            msg = "References must be a string or a sequence of strings."
+            raise TypeError(msg)
+
+        if not hypothesis or not reference_list or not any(reference_list):
+            logging.warning("Cannot compute BLEU score with empty reference(s) or hypothesis.")  # noqa: LOG015
+            return BleuResult(score=0.0, cumulative_ngram_scores=dict.fromkeys(range(1, max_n + 1), 0.0))
+
+        try:
+            # Preprocess hypothesis
+            hyp_tokens: List[str] = list(self._preprocess_text(hypothesis))
+
+            # Preprocess reference(s)
+            ref_tokens_list: List[List[str]] = [list(self._preprocess_text(ref)) for ref in reference_list]
+
+            # Handle cases where preprocessing results in empty lists
+            if not hyp_tokens or not any(ref_tokens_list):
+                if not hyp_tokens:
+                    logging.warning(f"Hypothesis '{hypothesis[:50]}...' became empty after preprocessing.")  # noqa: G004, LOG015
+                if not any(ref_tokens_list):
+                    logging.warning("All references became empty after preprocessing.")  # noqa: LOG015
+                return BleuResult(score=0.0, cumulative_ngram_scores=dict.fromkeys(range(1, max_n + 1), 0.0))
+
+            cumulative_scores: Dict[int, float] = {}
+            for n in range(1, max_n + 1):
+                # Weights for cumulative BLEU-n: uniform up to n, zero beyond
+                weights = tuple(1.0 / n if i < n else 0.0 for i in range(max_n))
+                ngram_score = sentence_bleu(
+                    ref_tokens_list,
+                    hyp_tokens,
+                    weights=weights,
+                    smoothing_function=self.smoothing,
+                )
+                cumulative_scores[n] = ngram_score  # No need for float() cast
+
+            # Calculate overall score using uniform weights across all considered n-grams
+            uniform_weights = tuple(1.0 / max_n for _ in range(max_n))
+            overall_score = sentence_bleu(
+                ref_tokens_list,
+                hyp_tokens,
+                weights=uniform_weights,
+                smoothing_function=self.smoothing,
+            )
+
+            return BleuResult(score=overall_score, cumulative_ngram_scores=cumulative_scores)  # type: ignore  # noqa: PGH003
+
+        except Exception as e:
+            ref_repr = (
+                f"'{reference_list[0][:50]}...'"
+                if isinstance(reference_list, list) and reference_list
+                else str(reference_list)
+            )
+            hyp_repr = f"'{hypothesis[:50]}...'"
+            logging.exception(  # noqa: LOG015
+                f"Error computing n-gram BLEU scores for refs: {ref_repr} and hyp: {hyp_repr}. Max_n: {max_n}",  # noqa: G004
+                exc_info=e,
+            )
+            # Return 0 scores on failure
+            return BleuResult(score=0.0, cumulative_ngram_scores=dict.fromkeys(range(1, max_n + 1), 0.0))
 
 
 def extract_string_similarity_vector(original: str, compare_text: str) -> dict[str, float]:
@@ -488,10 +603,10 @@ def extract_string_similarity_vector(original: str, compare_text: str) -> dict[s
     bm25 = BM25([s1.split()])
     tokenized_query = s2.split()
     doc_scores = bm25.get_scores(tokenized_query)
-    print(f"BM25 scores: {doc_scores}")  # noqa: T201
     # Initialize the TF-IDF vectorizer
     tfidf = TFIDF(s1, s2)
-    scorer = BleuScore()
+    scorer = BleuScorer()
+
     return {
         "levenshtein": normalized_levenshtein.similarity(s1, s2),
         "jaro_winkler": jaro_winkler.similarity(s1, s2),
@@ -513,7 +628,7 @@ def extract_string_similarity_vector(original: str, compare_text: str) -> dict[s
         "fuzzwuzzy": fuzz.ratio(s1, s2),
         "WRatio": fuzz.WRatio(s1, s2),
         "seq_match": seq.ratio(),
-        "bleu_score": scorer.score_text_ngram(s1, s2),
+        "bleu_score": scorer.score_all_ngrams(s1, s2).score,
         "bm25": doc_scores[0],
         "Cosine": tfidf.calculate_distance("cosine"),
         "Euclidean": tfidf.calculate_distance("euclidean"),
