@@ -21,13 +21,12 @@ try:
     from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 except ImportError:
     msg = "NLTK library not found. Please install it: pip install nltk"
-    raise ImportError(msg)
+    raise ImportError(msg) from None
 
 # Other core libraries
 from rapidfuzz import fuzz as rapidfuzz_fuzz  # Alias for clarity
 from scipy.sparse import csr_matrix
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics import jaccard_score
 from sklearn.metrics.pairwise import cosine_similarity, pairwise_distances
 
 # Optional libraries (handle import errors gracefully)
@@ -70,7 +69,7 @@ _NLTK_RESOURCES = {
 _NLTK_DATA_DOWNLOADED = dict.fromkeys(_NLTK_RESOURCES, False)
 
 
-def _ensure_nltk_data(resource_name: str, download_dir: Optional[str] = None):
+def _ensure_nltk_data(resource_name: str, download_dir: Optional[str] = None) -> bool:
     """Check if NLTK resource is available, downloads if not."""
     if resource_name not in _NLTK_RESOURCES:
         warnings.warn(f"Attempting to ensure unknown NLTK resource: {resource_name}", RuntimeWarning, stacklevel=2)
@@ -83,67 +82,58 @@ def _ensure_nltk_data(resource_name: str, download_dir: Optional[str] = None):
         find_path = _NLTK_RESOURCES[resource_name]
         nltk.data.find(find_path)
         _NLTK_DATA_DOWNLOADED[resource_name] = True
-        logging.info(f"NLTK data '{resource_name}' found.")
-        return True
+        logging.info("NLTK data '%s' found.", resource_name)
     except LookupError:
-        print(f"NLTK data '{resource_name}' not found. Downloading...")
+        logging.info(f"NLTK data '{resource_name}' not found. Downloading...")
         try:
             # Use the resource name (e.g., 'omw-1.4') for download
             nltk.download(resource_name, download_dir=download_dir, quiet=True)
             # Verify download by finding again
             nltk.data.find(_NLTK_RESOURCES[resource_name])
             _NLTK_DATA_DOWNLOADED[resource_name] = True
-            print(f"NLTK data '{resource_name}' downloaded successfully.")
+            logging.info(f"NLTK data '{resource_name}' downloaded successfully.")
             return True
         except Exception as e:
             warnings.warn(
                 f"Failed to download or verify NLTK data '{resource_name}'. Dependent features might fail. Error: {e}",
                 RuntimeWarning,
+                stacklevel=2,
             )
             return False
+    else:
+        return True
 
 
 # --- Preprocessing Setup ---
-
-DEFAULT_STOP_WORDS: Optional[Set[str]] = None
-DEFAULT_LEMMATIZER: Optional[WordNetLemmatizer] = None
-DEFAULT_STEMMER: Optional[PorterStemmer] = None
-
-
+@lru_cache(maxsize=1)
 def get_default_stopwords() -> Set[str]:
     """Lazily loads default English stopwords."""
-    global DEFAULT_STOP_WORDS
-    if DEFAULT_STOP_WORDS is None:
-        if _ensure_nltk_data("stopwords"):
-            DEFAULT_STOP_WORDS = set(stopwords.words("english"))
-        else:
-            DEFAULT_STOP_WORDS = set()  # Fallback
-    return DEFAULT_STOP_WORDS
+    return set(stopwords.words("english")) if _ensure_nltk_data("stopwords") else set()  # Fallback
 
 
+@lru_cache(maxsize=1)
 def get_default_lemmatizer() -> WordNetLemmatizer:
     """Lazily loads default WordNetLemmatizer."""
-    global DEFAULT_LEMMATIZER
-    if DEFAULT_LEMMATIZER is None:
-        # WordNet requires 'wordnet' and often 'omw-1.4'
-        if _ensure_nltk_data("wordnet") and _ensure_nltk_data("omw-1.4"):
-            DEFAULT_LEMMATIZER = WordNetLemmatizer()
-        else:
-            # Fallback: Create instance, might raise later if data truly missing
-            DEFAULT_LEMMATIZER = WordNetLemmatizer()
-            warnings.warn(
-                "WordNet/OMW data not found or failed to download. Lemmatization might not work correctly.",
-                RuntimeWarning,
-            )
-    return DEFAULT_LEMMATIZER
+    if _ensure_nltk_data("wordnet") and _ensure_nltk_data("omw-1.4"):
+        result = WordNetLemmatizer()
+    else:
+        warnings.warn(
+            "WordNet/OMW data not found or failed to download. Lemmatization might not work correctly.",
+            RuntimeWarning, stacklevel=2,
+        )
+        result = WordNetLemmatizer()
+    return result
 
 
+@lru_cache(maxsize=1)
 def get_default_stemmer() -> PorterStemmer:
     """Lazily loads default PorterStemmer."""
-    global DEFAULT_STEMMER
-    if DEFAULT_STEMMER is None:
-        DEFAULT_STEMMER = PorterStemmer()
-    return DEFAULT_STEMMER
+    return PorterStemmer()
+
+
+DEFAULT_STOP_WORDS: Optional[Set[str]] = get_default_stopwords()
+DEFAULT_LEMMATIZER: Optional[WordNetLemmatizer] = get_default_lemmatizer()
+DEFAULT_STEMMER: Optional[PorterStemmer] = get_default_stemmer()
 
 
 # Pre-compile regex patterns
@@ -232,6 +222,7 @@ class TFIDFCalculator:
 
     def __init__(
         self,
+        *,
         use_lemmatization: bool = True,  # Default to lemmatization
         use_stopwords: bool = True,
         stop_words: Optional[Set[str]] = None,
