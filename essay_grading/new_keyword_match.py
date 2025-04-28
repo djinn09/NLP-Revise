@@ -119,7 +119,8 @@ def get_default_lemmatizer() -> WordNetLemmatizer:
     else:
         warnings.warn(
             "WordNet/OMW data not found or failed to download. Lemmatization might not work correctly.",
-            RuntimeWarning, stacklevel=2,
+            RuntimeWarning,
+            stacklevel=2,
         )
         result = WordNetLemmatizer()
     return result
@@ -159,15 +160,15 @@ def preprocess_text_base(text: str) -> str:
 def tokenize_text(text: str) -> Tuple[str, ...]:
     """Lowercase, remove punctuation, and tokenize using NLTK."""
     if not isinstance(text, str):
-        return tuple()
+        return ()
     # Ensure punkt is available
     _ensure_nltk_data("punkt")
     try:
         # Use simple map for punctuation before tokenizing
         cleaned_text = text.lower().translate(REMOVE_PUNCTUATION_MAP)
         return tuple(word_tokenize(cleaned_text))
-    except Exception as e:
-        logging.error(f"NLTK word_tokenize failed for text: '{text[:50]}...'. Error: {e}")
+    except Exception:
+        logging.exception(f"NLTK word_tokenize failed for text: '{text[:50]}...'.")
         # Fallback to simple split
         return tuple(cleaned_text.split())
 
@@ -178,9 +179,9 @@ def lemmatize_tokens(tokens: Tuple[str, ...]) -> Tuple[str, ...]:
     lemmatizer = get_default_lemmatizer()
     try:
         return tuple(lemmatizer.lemmatize(token) for token in tokens)
-    except Exception as e:
+    except Exception:
         # WordNet data might be missing even if instance created
-        logging.error(f"Lemmatization failed. Ensure WordNet/OMW data is downloaded. Error: {e}")
+        logging.exception("Lemmatization failed. Ensure WordNet/OMW data is downloaded.")
         return tokens  # Return original tokens on failure
 
 
@@ -210,7 +211,24 @@ QGRAM_4 = QGram(4)
 SIM_COSINE = Cosine(2)  # Cosine similarity on character 2-grams
 SIM_JACCARD = Jaccard(2)  # Jaccard similarity on character 2-grams
 
+
 # --- TFIDF Class (Refactored) ---
+@dataclass
+class TfidfConfig:
+    """Configuration for the TfidfVectorizer.
+
+    Attributes:
+        token_pattern (str): Regular expression for tokenization.
+        ngram_range (Tuple[int, int]): The range of n-grams to consider.
+        max_df (float): Maximum document frequency for filtering terms.
+        min_df (int): Minimum document frequency for filtering terms.
+
+    """
+
+    token_pattern: str = r"(?u)\b\w\w+\b"  # noqa: S105
+    ngram_range: Tuple[int, int] = (1, 1)
+    max_df: float = 1.0
+    min_df: int = 1
 
 
 class TFIDFCalculator:
@@ -223,39 +241,47 @@ class TFIDFCalculator:
     def __init__(
         self,
         *,
-        use_lemmatization: bool = True,  # Default to lemmatization
+        use_lemmatization: bool = True,
         use_stopwords: bool = True,
         stop_words: Optional[Set[str]] = None,
-        token_pattern: Optional[str] = r"(?u)\b\w\w+\b",  # Default sklearn pattern
-        ngram_range: Tuple[int, int] = (1, 1),
-        max_df: float = 1.0,
-        min_df: int = 1,
-        **tfidf_kwargs,  # Pass other TfidfVectorizer options
-    ):
+        tfidf_config: Optional[TfidfConfig] = None,
+        **tfidf_kwargs: Any,  # noqa: ANN401
+    ) -> None:
+        """Initialize the TFIDFCalculator with configuration options.
+
+        Args:
+            use_lemmatization (bool): Whether to use lemmatization.
+            use_stopwords (bool): Whether to use stopwords.
+            stop_words (Optional[Set[str]]): Custom stopwords to use.
+            tfidf_config (TfidfConfig): Configuration for TfidfVectorizer.
+            **tfidf_kwargs: Additional keyword arguments for TfidfVectorizer.
+
+        """
         self.use_lemmatization = use_lemmatization
         self.use_stopwords = use_stopwords
         self.custom_stop_words = frozenset(stop_words) if stop_words else frozenset(get_default_stopwords())
         self._tokenizer = self._build_tokenizer()
 
         # Initialize TfidfVectorizer
+        tfidf_config = tfidf_config or TfidfConfig()
         self.vectorizer = TfidfVectorizer(
             tokenizer=self._tokenizer if self._tokenizer else None,
-            token_pattern=token_pattern if not self._tokenizer else None,
+            token_pattern=tfidf_config.token_pattern if not self._tokenizer else "",
             stop_words=list(self.custom_stop_words)
             if use_stopwords and not self._tokenizer
             else None,  # Sklearn handles stopwords if no custom tokenizer
-            ngram_range=ngram_range,
-            max_df=max_df,
-            min_df=min_df,
+            ngram_range=tfidf_config.ngram_range,
+            max_df=tfidf_config.max_df,
+            min_df=tfidf_config.min_df,
             **tfidf_kwargs,
         )
         logging.info(f"TFIDFCalculator initialized. Lemmatization: {use_lemmatization}, Stopwords: {use_stopwords}")
 
     def _build_tokenizer(self) -> Optional[Callable[[str], List[str]]]:
-        """Creates a tokenizer function based on normalization settings."""
+        """Create a tokenizer function based on normalization settings."""
         if (
             self.use_lemmatization or self.use_stopwords
-        ):  # Need custom handling if lemmatizing or using specific stopword logic
+        ):  # Need custom handling if lemmatizing or using specific stop-word logic
             sw = self.custom_stop_words if self.use_stopwords else frozenset()
 
             def tokenizer_func(text: str) -> List[str]:
@@ -268,21 +294,30 @@ class TFIDFCalculator:
                 return list(tokens)
 
             return tokenizer_func
-        else:
-            # Let TfidfVectorizer handle tokenization with token_pattern if no custom norm needed
-            return None
+        # Let TfidfVectorizer handle tokenization with token_pattern if no custom norm needed
+        return None
 
     def fit_transform(self, texts: Sequence[str]) -> csr_matrix:
         """Fits the vectorizer and transforms the input texts."""
         try:
-            return self.vectorizer.fit_transform(texts)
-        except Exception as e:
-            logging.error(f"TF-IDF fit_transform failed: {e}")
+            return csr_matrix(self.vectorizer.fit_transform(texts))
+        except Exception:
+            logging.exception("TF-IDF fit_transform failed")
             # Return an empty sparse matrix matching the expected shape
             return csr_matrix((len(texts), 0), dtype=float)
 
     def calculate_metrics_pairwise(self, text1: str, text2: str) -> Dict[str, Optional[float]]:
-        """Calculates TF-IDF based metrics between two texts."""
+        """Calculate various TF-IDF-based similarity and distance metrics for a pair of texts.
+
+        Args:
+            text1 (str): The first text input.
+            text2 (str): The second text input.
+
+        Returns:
+            Dict[str, Optional[float]]: A dictionary containing similarity and distance metrics,
+            such as cosine similarity, Euclidean distance, and Jaccard similarity.
+
+        """
         metrics = {
             "tfidf_cosine_similarity": None,
             "tfidf_euclidean_distance": None,
