@@ -406,7 +406,7 @@ class BleuScorer:
         stop_words: Optional[Set[str]] = None,
         lemmatizer: Optional[WordNetLemmatizer] = None,
         smoothing_function: Optional[Callable] = None,
-    ):
+    ) -> None:
         self.lemmatizer = lemmatizer or get_default_lemmatizer()
         self.stop_words = frozenset(stop_words or get_default_stopwords())  # Use frozenset for caching
         self.smoothing = smoothing_function or SmoothingFunction().method1
@@ -433,7 +433,10 @@ class BleuScorer:
             return ()
 
     def _calculate_bleu(
-        self, ref_tokens_list: List[List[str]], hyp_tokens: List[str], weights: Tuple[float, ...]
+        self,
+        ref_tokens_list: List[List[str]],
+        hyp_tokens: List[str],
+        weights: Tuple[float, ...],
     ) -> float:
         """Internal BLEU calculation with error handling."""
         if not hyp_tokens or not any(ref_tokens_list):
@@ -441,12 +444,15 @@ class BleuScorer:
         try:
             # Note: NLTK's sentence_bleu expects list of lists for references
             return sentence_bleu(
-                references=ref_tokens_list, hypothesis=hyp_tokens, weights=weights, smoothing_function=self.smoothing
+                references=ref_tokens_list,
+                hypothesis=hyp_tokens,
+                weights=weights,
+                smoothing_function=self.smoothing,
             )
         except ZeroDivisionError:
             # Can happen with very short sentences and no smoothing
             logging.warning(
-                f"BLEU calculation resulted in ZeroDivisionError (likely short hypothesis). Returning 0.0. Hyp: {hyp_tokens}"
+                f"BLEU calculation resulted in ZeroDivisionError (likely short hypothesis). Returning 0.0. Hyp: {hyp_tokens}",
             )
             return 0.0
         except Exception as e:
@@ -475,7 +481,7 @@ class BleuScorer:
         """Computes cumulative BLEU-1 to BLEU-N scores."""
         ref_list = [references] if isinstance(references, str) else references
         if not hypothesis or not ref_list or not any(ref_list):
-            return BleuResult(score=0.0, cumulative_ngram_scores={n: 0.0 for n in range(1, max_n + 1)})
+            return BleuResult(score=0.0, cumulative_ngram_scores=dict.fromkeys(range(1, max_n + 1), 0.0))
 
         hyp_tokens = list(self._preprocess_bleu_text(hypothesis, self.stop_words))
         ref_tokens_list = [list(self._preprocess_bleu_text(ref, self.stop_words)) for ref in ref_list]
@@ -511,7 +517,7 @@ def calculate_bm25(reference: str, hypothesis: str) -> Optional[float]:
         doc_scores = bm25.get_scores(tokenized_query)
         return doc_scores[0] if doc_scores else 0.0
     except Exception as e:
-        logging.error(f"BM25 calculation failed for '{reference[:50]}...' vs '{hypothesis[:50]}...': {e}")
+        logging.exception(f"BM25 calculation failed for '{reference[:50]}...' vs '{hypothesis[:50]}...'")
         return None
 
 
@@ -523,12 +529,13 @@ class SimilarityCalculator:
 
     def __init__(
         self,
+        *,
         use_lemmatization: bool = True,
         use_stopwords: bool = True,
         custom_stop_words: Optional[Set[str]] = None,
         tfidf_options: Optional[Dict[str, Any]] = None,
         bleu_smoothing_function: Optional[Callable] = None,
-    ):
+    ) -> None:
         """Initialize the calculator with shared configurations."""
         logging.info("Initializing SimilarityCalculator...")
         # Ensure base NLTK data needed for defaults
@@ -545,7 +552,9 @@ class SimilarityCalculator:
 
         # Instantiate reusable components
         self.bleu_scorer = BleuScorer(
-            stop_words=self.stop_words, lemmatizer=self.lemmatizer, smoothing_function=bleu_smoothing_function
+            stop_words=self.stop_words,
+            lemmatizer=self.lemmatizer,
+            smoothing_function=bleu_smoothing_function,
         )
         self.tfidf_calculator = TFIDFCalculator(
             use_lemmatization=use_lemmatization,
@@ -747,7 +756,7 @@ class SimilarityCalculator:
         try:
             with ProcessPoolExecutor(max_workers=max_workers) as executor:
                 logging.info(
-                    f"Submitting {len(text_pairs_list)} tasks to ProcessPoolExecutor with max_workers={executor._max_workers}"
+                    f"Submitting {len(text_pairs_list)} tasks to ProcessPoolExecutor with max_workers={executor._max_workers}",
                 )
                 for i, (text1, text2) in enumerate(text_pairs_list):
                     future = executor.submit(_worker_calculate_single_pair, config, text1, text2)
@@ -761,18 +770,18 @@ class SimilarityCalculator:
                         result = future.result()
                         results_unordered[index] = result
                     except Exception as e:
-                        logging.error(
-                            f"Error processing pair {index} in parallel worker: {e}", exc_info=False
+                        logging.error(  # noqa: TRY400
+                            f"Error processing pair {index} in parallel worker: {e}",
+                            exc_info=False,
                         )  # Don't log full trace for every failure
                         # Log the specific error from the worker if possible
-                        logging.error(f"Worker error details for pair {index}: {e}")
+                        logging.exception(f"Worker error details for pair {index}: {e}")
                         results_unordered[index] = {}
         except Exception as e:
             # Catch errors during executor setup or shutdown
             logging.exception(f"Error occurred in ProcessPoolExecutor management: {e}")
             # Ensure results list has the correct size even if processing failed midway
-            results = [results_unordered.get(i, {}) for i in range(len(text_pairs_list))]
-            return results
+            return [results_unordered.get(i, {}) for i in range(len(text_pairs_list))]
 
         # Reconstruct results in the original order
         results = [results_unordered.get(i, {}) for i in range(len(text_pairs_list))]
@@ -817,12 +826,12 @@ if __name__ == "__main__":
     empty_text = ""
 
     # --- Single Pair Calculation ---
-    print("\n--- Single Pair Calculations ---")
+    print("\n--- Single Pair Calculations ---")  # noqa: T201
     similarity_vector1 = calculator.calculate_single_pair(original_text, compare_text_similar)
-    print("\nSimilarity (Original vs. Similar):")
+    print("\nSimilarity (Original vs. Similar):")  # noqa: T201
     for k in sorted(similarity_vector1.keys()):
         v = similarity_vector1[k]
-        print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
+        print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")  # noqa: T201
 
     # similarity_vector2 = calculator.calculate_single_pair(original_text, compare_text_different)
     # print(f"\nSimilarity (Original vs. Different):")

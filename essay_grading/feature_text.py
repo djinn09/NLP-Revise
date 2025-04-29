@@ -9,7 +9,6 @@ Includes:
 from __future__ import annotations
 
 import logging
-import warnings  # Use warnings for optional components
 from typing import Dict, Optional, Set
 
 import amrlib
@@ -58,15 +57,16 @@ class AMRSimilarityCalculator:
         stog_model_dir: Path to the downloaded `amrlib` Stack-Transformer (StoG)
                         parsing model directory. Defaults to None (will use amrlib default).
         device: Device for PyTorch models ('cuda', 'cpu', etc.). Defaults to 'cpu'.
+
     """
 
-    def __init__(self, stog_model_dir: Optional[str] = None, device: str = "cpu"):
+    def __init__(self, stog_model_dir: Optional[str] = None, device: str = "cpu") -> None:
         """Initializes the AMRSimilarityCalculator."""
         self.device = device
         self.stog_model = None
         self._load_models(stog_model_dir)
 
-    def _load_models(self, model_dir: Optional[str]):
+    def _load_models(self, model_dir: Optional[str]) -> None:
         """Loads the necessary amrlib models."""
         try:
             logger.info("Loading AMR parsing model (StoG)... This may take a moment.")
@@ -74,7 +74,7 @@ class AMRSimilarityCalculator:
             self.stog_model = amrlib.load_stog_model(model_dir=model_dir, device=self.device)
             logger.info("AMR StoG model loaded.")
 
-        except Exception as e:
+        except Exception:
             logger.exception(f"Failed to load amrlib models. AMR features will not work. Error: {e}")
 
             # Optionally re-raise or just log and let methods fail later
@@ -98,15 +98,14 @@ class AMRSimilarityCalculator:
             # A proper implementation would handle multi-sentence paragraphs better.
             if graphs_penman:
                 return graphs_penman[0]
-            else:
-                return None
-        except Exception as e:
-            logger.error(f"AMR parsing failed for text '{text[:50]}...': {e}", exc_info=True)
+            return None
+        except Exception:
+            logger.exception(f"AMR parsing failed for text '{text[:50]}...'")
             return None
 
     # Example rewriting _get_graph_concepts (Adapt others similarly)
     def _get_graph_concepts(self, penman_graph_str: str) -> Set[str]:
-        """Extracts concepts (instance labels and constants) using the penman library."""
+        """Extract concepts (instance labels and constants) using the penman library."""
         concepts = set()
         if not penman_graph_str:
             return concepts
@@ -115,13 +114,13 @@ class AMRSimilarityCalculator:
             variables = graph.variables()  # Get the set of all variable names (e.g., {'d', 'g', 't'})
 
             # 1. Add concepts from instance declarations (e.g., 'dog' in '(d / dog)')
-            for var, concept, role in graph.instances():
+            for _var, concept, _ in graph.instances():
                 if concept:  # Concept is the label after the '/'
                     concepts.add(str(concept))
 
             # 2. Add constants found as targets in edges
             #    (e.g., "blue" in ':color "blue"')
-            for source, role, target in graph.edges():
+            for _source, _, target in graph.edges():
                 # If the target is NOT one of the graph's variables, it's a constant
                 if target not in variables:
                     # penman stores constants as strings; strip quotes from string literals
@@ -130,7 +129,7 @@ class AMRSimilarityCalculator:
 
             # 3. Add constants found as targets in attributes (similar to edges)
             #    (e.g., 5 in ':value 5')
-            for source, role, target in graph.attributes():
+            for _, _, target in graph.attributes():
                 # If the target is NOT one of the graph's variables, it's a constant
                 if target not in variables:
                     constant_val = str(target).strip('"')
@@ -138,8 +137,8 @@ class AMRSimilarityCalculator:
 
         except penman.DecodeError:
             logger.exception(f"Penman library failed to decode graph:\n{penman_graph_str}")
-        except Exception as e:  # Catch other potential errors during processing
-            logger.exception(f"Error processing graph with penman library: {e}\nGraph:\n{penman_graph_str}")
+        except Exception:  # Catch other potential errors during processing
+            logger.exception(f"Error processing graph with penman library: \nGraph:\n{penman_graph_str}")
         return concepts
 
     def _get_named_entities(self, penman_graph_str: str) -> Set[str]:
@@ -149,7 +148,7 @@ class AMRSimilarityCalculator:
         try:
             graph = penman.decode(penman_graph_str)
             # Look for :wiki or :name attributes/edges
-            for source, role, target in graph.attributes():
+            for _source, role, target in graph.attributes():
                 # Note: :name might point to a variable representing a name subgraph
                 # :wiki usually points directly to a constant
                 if (
@@ -158,7 +157,7 @@ class AMRSimilarityCalculator:
                     nes.add(str(target).strip('"'))
                 # Add more complex logic here if needed to handle :name subgraphs
             # Also check edges if :wiki/:name can appear there
-            for source, role, target in graph.edges():
+            for _source, role, target in graph.edges():
                 if role == ":wiki" and target != "-":
                     # Ensure target is a constant here too
                     if target not in graph.variables():
@@ -166,7 +165,7 @@ class AMRSimilarityCalculator:
 
         except penman.DecodeError:
             logger.exception(f"Penman library failed to decode NEs from graph:\n{penman_graph_str}")
-        except Exception as e:
+        except Exception:
             logger.exception(f"Error processing NEs with penman library: {e}\nGraph:\n{penman_graph_str}")
         return nes
 
@@ -176,7 +175,6 @@ class AMRSimilarityCalculator:
         negated_concepts = set()
         try:
             lines = penman_graph.strip().split("\n")
-            negated_vars = set()
             # First pass: find variables directly negated
             for line in lines:
                 line = line.strip()
@@ -200,14 +198,14 @@ class AMRSimilarityCalculator:
             graph = penman.decode(penman_graph_str)
             top_variable = graph.top  # Get the top variable (e.g., 'w' in '# ::id N ::snt X (w / want)')
             # Find the instance definition for the top variable
-            for var, concept, role in graph.instances():
+            for var, concept, _role in graph.instances():
                 if var == top_variable:
                     return str(concept)
             return None  # Should not happen in a valid graph with a top
         except penman.DecodeError:
             logger.exception(f"Penman library failed to decode root from graph:\n{penman_graph_str}")
             return None
-        except Exception as e:
+        except Exception:
             logger.exception(f"Error processing root with penman library: {e}\nGraph:\n{penman_graph_str}")
             return None
 
@@ -254,8 +252,8 @@ class AMRSimilarityCalculator:
             results["smatch_precision"] = precision
             results["smatch_recall"] = recall
             logger.info(f"Smatch calculated: F={f_score:.4f}, P={precision:.4f}, R={recall:.4f}")
-        except Exception as e:
-            logger.exception(f"Smatch calculation failed: {e}")
+        except Exception:
+            logger.exception("Smatch calculation failed:")
 
         # 2. Concept Overlap
         try:
@@ -267,10 +265,10 @@ class AMRSimilarityCalculator:
                 intersection / union if union > 0 else 1.0 if not concepts1 and not concepts2 else 0.0
             )
             logger.debug(
-                f"Concepts: Set1={len(concepts1)}, Set2={len(concepts2)}, Jaccard={results['concept_jaccard']:.4f}"
+                f"Concepts: Set1={len(concepts1)}, Set2={len(concepts2)}, Jaccard={results['concept_jaccard']:.4f}",
             )
-        except Exception as e:
-            logger.exception(f"Concept similarity calculation failed: {e}")
+        except Exception:
+            logger.exception("Concept similarity calculation failed")
 
         # 3. Named Entity Overlap
         try:
@@ -280,10 +278,10 @@ class AMRSimilarityCalculator:
             union = len(ne1.union(ne2))
             results["named_entity_jaccard"] = intersection / union if union > 0 else 1.0 if not ne1 and not ne2 else 0.0
             logger.debug(
-                f"Named Entities: Set1={len(ne1)}, Set2={len(ne2)}, Jaccard={results['named_entity_jaccard']:.4f}"
+                f"Named Entities: Set1={len(ne1)}, Set2={len(ne2)}, Jaccard={results['named_entity_jaccard']:.4f}",
             )
-        except Exception as e:
-            logger.exception(f"Named entity similarity calculation failed: {e}")
+        except Exception:
+            logger.exception("Named entity similarity calculation failed")
 
         # 4. Negation Overlap
         try:
@@ -297,8 +295,8 @@ class AMRSimilarityCalculator:
             # Alternative: results["negation_jaccard"] = intersection / union if union > 0 else 1.0 if not neg1 and not neg2 else 0.0
             logger.debug(f"Negations: Set1={len(neg1)}, Set2={len(neg2)}, Match={results['negation_jaccard']:.4f}")
 
-        except Exception as e:
-            logger.exception(f"Negation similarity calculation failed: {e}")
+        except Exception:
+            logger.exception("Negation similarity calculation failed")
 
         # 5. Root Similarity
         try:
@@ -306,8 +304,8 @@ class AMRSimilarityCalculator:
             root2 = self._get_root_concept(amr2_penman)
             results["root_similarity"] = 1.0 if root1 is not None and root1 == root2 else 0.0
             logger.debug(f"Roots: R1='{root1}', R2='{root2}', Sim={results['root_similarity']:.4f}")
-        except Exception as e:
-            logger.exception(f"Root similarity calculation failed: {e}")
+        except Exception:
+            logger.exception("Root similarity calculation failed")
 
         logger.info("Finished calculating implemented AMR features.")
         return results
@@ -360,7 +358,7 @@ if __name__ == "__main__":
         logger.info("Initializing AMR Similarity Calculator...")
         # You might need to specify model path: model_dir='/path/to/downloaded/model'
         amr_calculator = AMRSimilarityCalculator(
-            stog_model_dir="/mnt/e/Machine_learning/NLP-Revise/essay_grading/model_parse_xfm_bart_base-v0_1_0",
+            stog_model_dir="/mnt/e/Machine_learning/NLP-Revise/essay_grading/model_parse_xfm_bart_large-v0_1_0",
         )  # Reuse device if possible
         # Check if models loaded successfully
         if not amr_calculator.stog_model:
@@ -368,8 +366,8 @@ if __name__ == "__main__":
             ENABLE_AMR_SIMILARITY = False
         else:
             logger.info("AMR Calculator initialized successfully.")
-    except Exception as e:
-        logger.error(f"Failed to initialize AMRSimilarityCalculator: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Failed to initialize AMRSimilarityCalculator")
         ENABLE_AMR_SIMILARITY = False
 
     # --- Processing Loop ---

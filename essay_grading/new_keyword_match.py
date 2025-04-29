@@ -18,7 +18,6 @@ from nltk.stem import PorterStemmer, WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 from rank_bm25 import BM25L as BM25
-from rapidfuzz import fuzz
 from scipy.sparse import csr_matrix
 from similarity.cosine import Cosine
 from similarity.jaccard import Jaccard
@@ -384,7 +383,7 @@ class BleuScorer:
 
         # Basic configuration logging
         logging.info(
-            f"BleuScorer initialized. Stop words: {'Default' if stop_words is None else f'{len(stop_words)} custom'}, "  # noqa: G004
+            f"BleuScorer initialized. Stop words: {'Default' if stop_words is None else f'{len(stop_words)} custom'}, "
             f"Lemmatizer: {'Default' if lemmatizer is None else 'Custom'}, "
             f"Smoothing: {self.smoothing.__name__ if hasattr(self.smoothing, '__name__') else 'Custom Function'}",
         )
@@ -415,7 +414,7 @@ class BleuScorer:
             ]
             return tuple(processed_tokens)
         except Exception as e:
-            logging.exception(f"Error during preprocessing text: '{text[:50]}...'. Error: {e}")  # noqa: G004, LOG015, TRY401
+            logging.exception(f"Error during preprocessing text: '{text[:50]}...'. Error: {e}")  # noqa: TRY401
             # Return empty tuple on failure to allow BLEU to compute (likely 0)
             return ()
 
@@ -447,7 +446,7 @@ class BleuScorer:
             raise TypeError(msg)
 
         if not hypothesis or not reference_list or not any(reference_list):
-            logging.warning("Cannot compute BLEU score with empty reference(s) or hypothesis.")  # noqa: LOG015
+            logging.warning("Cannot compute BLEU score with empty reference(s) or hypothesis.")
             return BleuResult(score=0.0)
 
         try:
@@ -461,9 +460,9 @@ class BleuScorer:
             if not hyp_tokens or not any(ref_tokens_list):
                 score_value = 0.0
                 if not hyp_tokens:
-                    logging.warning(f"Hypothesis '{hypothesis[:50]}...' became empty after preprocessing.")  # noqa: G004, LOG015
+                    logging.warning(f"Hypothesis '{hypothesis[:50]}...' became empty after preprocessing.")
                 if not any(ref_tokens_list):
-                    logging.warning("All references became empty after preprocessing.")  # noqa: LOG015
+                    logging.warning("All references became empty after preprocessing.")
 
             else:
                 score_value = sentence_bleu(
@@ -483,8 +482,8 @@ class BleuScorer:
                 else str(reference_list)
             )
             hyp_repr = f"'{hypothesis[:50]}...'"
-            logging.exception(  # noqa: LOG015
-                f"Error computing BLEU score for refs: {ref_repr} and hyp: {hyp_repr}. Weights: {weights}",  # noqa: G004
+            logging.exception(
+                f"Error computing BLEU score for refs: {ref_repr} and hyp: {hyp_repr}. Weights: {weights}",
                 exc_info=e,  # Log the full traceback
             )
             return BleuResult(score=0.0)  # Return 0 score on failure
@@ -518,7 +517,7 @@ class BleuScorer:
             raise TypeError(msg)
 
         if not hypothesis or not reference_list or not any(reference_list):
-            logging.warning("Cannot compute BLEU score with empty reference(s) or hypothesis.")  # noqa: LOG015
+            logging.warning("Cannot compute BLEU score with empty reference(s) or hypothesis.")
             return BleuResult(score=0.0, cumulative_ngram_scores=dict.fromkeys(range(1, max_n + 1), 0.0))
 
         try:
@@ -531,9 +530,9 @@ class BleuScorer:
             # Handle cases where preprocessing results in empty lists
             if not hyp_tokens or not any(ref_tokens_list):
                 if not hyp_tokens:
-                    logging.warning(f"Hypothesis '{hypothesis[:50]}...' became empty after preprocessing.")  # noqa: G004, LOG015
+                    logging.warning(f"Hypothesis '{hypothesis[:50]}...' became empty after preprocessing.")
                 if not any(ref_tokens_list):
-                    logging.warning("All references became empty after preprocessing.")  # noqa: LOG015
+                    logging.warning("All references became empty after preprocessing.")
                 return BleuResult(score=0.0, cumulative_ngram_scores=dict.fromkeys(range(1, max_n + 1), 0.0))
 
             cumulative_scores: Dict[int, float] = {}
@@ -567,7 +566,7 @@ class BleuScorer:
             )
             hyp_repr = f"'{hypothesis[:50]}...'"
             logging.exception(
-                f"Error computing n-gram BLEU scores for refs: {ref_repr} and hyp: {hyp_repr}. Max_n: {max_n}",  # noqa: G004
+                f"Error computing n-gram BLEU scores for refs: {ref_repr} and hyp: {hyp_repr}. Max_n: {max_n}",
                 exc_info=e,
             )
             # Return 0 scores on failure
@@ -664,7 +663,8 @@ if __name__ == "__main__":
     # Output: A dictionary containing various similarity metrics and their scores
     # Note: The output will vary based on the input texts and the similarity metrics used.
     # You can adjust the original_text and compare_text variables to test different cases.
-    print("\nSimilarity (Original vs. Similar):")
+    print("\nSimilarity (Original vs. Similar):")  # noqa: T201
     for k in sorted(similarity_vector.keys()):
         v = similarity_vector[k]
-        print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
+        print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")  # noqa: T201
+

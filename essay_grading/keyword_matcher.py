@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Module for matching keywords from one paragraph to another and scoring.
 
 Provides a KeywordMatcher class with configurable preprocessing and
@@ -104,10 +103,10 @@ class KeywordMatcher:
         use_pos_tagging: bool = False,
         allowed_pos_tags: Optional[Set[str]] = None,
         custom_stop_words: Optional[Set[str]] = None,
-    ):
+    ) -> None:
         # --- Initial Warning ---
         logger.warning(
-            "[bold yellow]Initializing KeywordMatcher. Ensure required NLTK data is downloaded![/bold yellow]"
+            "[bold yellow]Initializing KeywordMatcher. Ensure required NLTK data is downloaded![/bold yellow]",
         )
 
         # --- Validate Configuration ---
@@ -122,7 +121,7 @@ class KeywordMatcher:
         self.use_lemmatization = use_lemmatization and not _LEMMA_INIT_FAILED
         if use_lemmatization and _LEMMA_INIT_FAILED:
             logger.error(
-                "Lemmatization requested, but lemmatizer failed to initialize. Lemmatization is DISABLED for coverage score."
+                "Lemmatization requested, but lemmatizer failed to initialize. Lemmatization is DISABLED for coverage score.",
             )
 
         self.use_pos_tagging = use_pos_tagging
@@ -151,7 +150,7 @@ class KeywordMatcher:
             f"KeywordMatcher initialized. Lemmatization (for coverage): {self.use_lemmatization}, "
             f"POS Tagging (for coverage): {self.use_pos_tagging}, "
             f"NLTK Stopwords loaded: {self._stopwords_loaded}. "
-            f"{('Allowed POS: ' + str(self.allowed_pos_tags)) if self.use_pos_tagging else ''}"
+            f"{('Allowed POS: ' + str(self.allowed_pos_tags)) if self.use_pos_tagging else ''}",
         )
 
     @lru_cache(maxsize=128)
@@ -168,7 +167,7 @@ class KeywordMatcher:
             return processed_tokens
         except LookupError:
             logger.exception(
-                "NLTK LookupError during tokenization (likely missing 'punkt' data). Returning empty token list."
+                "NLTK LookupError during tokenization (likely missing 'punkt' data). Returning empty token list.",
             )
             return []
         except Exception:
@@ -188,7 +187,7 @@ class KeywordMatcher:
             return normalized
         except LookupError:
             logger.exception(
-                "NLTK LookupError during lemmatization (likely missing 'wordnet'/'omw-1.4'). Returning un-normalized tokens."
+                "NLTK LookupError during lemmatization (likely missing 'wordnet'/'omw-1.4'). Returning un-normalized tokens.",
             )
             return tokens
         except Exception:
@@ -206,7 +205,7 @@ class KeywordMatcher:
             return tags
         except LookupError:
             logger.exception(
-                "NLTK LookupError during POS tagging (likely missing 'averaged_perceptron_tagger').Cannot perform POS tagging."
+                "NLTK LookupError during POS tagging (likely missing 'averaged_perceptron_tagger').Cannot perform POS tagging.",
             )
             return []
         except Exception:
@@ -232,7 +231,7 @@ class KeywordMatcher:
                     pos_filtered_tokens = [word for word, tag in tagged_tokens if tag in self.allowed_pos_tags]
                     if pos_filtered_tokens:
                         logger.debug(
-                            f"Extracted {len(pos_filtered_tokens)} potential keywords using POS tags: {self.allowed_pos_tags}"
+                            f"Extracted {len(pos_filtered_tokens)} potential keywords using POS tags: {self.allowed_pos_tags}",
                         )
                         keywords = set(self._normalize_tokens(tuple(pos_filtered_tokens)))
                     else:
