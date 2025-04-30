@@ -9,7 +9,7 @@ Includes:
 from __future__ import annotations
 
 import logging
-from typing import Dict, Optional, Set
+from typing import Any, Dict, Optional, Set
 
 import amrlib
 import penman  # Add this import at the top
@@ -26,15 +26,16 @@ except ImportError:
     # raise ImportError("Missing rich...")
 
 
-# --- Global Resources & Setup ---
-# (Keep setup for NLTK lemmatizer, punctuation, POS tags, logger)
-# ... (Existing global setup code) ...
 logger = logging.getLogger(__name__)
 
+STOG_MODEL = amrlib.load_stog_model(
+    model_dir="/mnt/e/Machine_learning/NLP-Revise/essay_grading/model_parse_xfm_bart_base-v0_1_0",
+    device="cpu",
+)
+# Placeholder for negation concept key
+NEGATION_PLACEHOLDER = "HAS_NEGATION"
 
-# =============================================================================
-# AMRSimilarityCalculator Class (New)
-# =============================================================================
+
 class AMRSimilarityCalculator:
     """Calculates similarity features based on Abstract Meaning Representation (AMR).
 
@@ -60,21 +61,22 @@ class AMRSimilarityCalculator:
 
     """
 
-    def __init__(self, stog_model_dir: Optional[str] = None, device: str = "cpu") -> None:
+    def __init__(self, stog_model: Optional[str] = None) -> None:
         """Initializes the AMRSimilarityCalculator."""
-        self.device = device
-        self.stog_model = None
-        self._load_models(stog_model_dir)
+        if not stog_model:
+            msg = "AMR model path is required."
+            raise ValueError(msg)
+        self._load_models(stog_model)
 
-    def _load_models(self, model_dir: Optional[str]) -> None:
-        """Loads the necessary amrlib models."""
+    def _load_models(self, model: Any) -> None:
+        """Load the necessary amrlib models."""
         try:
             logger.info("Loading AMR parsing model (StoG)... This may take a moment.")
             # Load the Stack-Transformer parser model
-            self.stog_model = amrlib.load_stog_model(model_dir=model_dir, device=self.device)
+            self.stog_model = model
             logger.info("AMR StoG model loaded.")
 
-        except Exception:
+        except Exception as e:
             logger.exception(f"Failed to load amrlib models. AMR features will not work. Error: {e}")
 
             # Optionally re-raise or just log and let methods fail later
@@ -158,10 +160,9 @@ class AMRSimilarityCalculator:
                 # Add more complex logic here if needed to handle :name subgraphs
             # Also check edges if :wiki/:name can appear there
             for _source, role, target in graph.edges():
-                if role == ":wiki" and target != "-":
+                if role == ":wiki" and target != "-" and target not in graph.variables():
                     # Ensure target is a constant here too
-                    if target not in graph.variables():
-                        nes.add(str(target).strip('"'))
+                    nes.add(str(target).strip('"'))
 
         except penman.DecodeError:
             logger.exception(f"Penman library failed to decode NEs from graph:\n{penman_graph_str}")
@@ -185,7 +186,7 @@ class AMRSimilarityCalculator:
 
             # For now, just count occurrence of ':polarity -' string as a proxy
             if ":polarity -" in penman_graph:
-                negated_concepts.add("HAS_NEGATION")  # Use a placeholder concept
+                negated_concepts.add(NEGATION_PLACEHOLDER)  # Use a placeholder concept
 
         except Exception:
             logger.exception(f"Error parsing negations from PENMAN:\n{penman_graph}")
@@ -291,7 +292,7 @@ class AMRSimilarityCalculator:
             union = len(neg1.union(neg2))
             # Jaccard on the placeholder 'HAS_NEGATION' isn't very meaningful
             # Better: Binary match (1 if both have negation, 0 otherwise)?
-            results["negation_jaccard"] = 1.0 if "HAS_NEGATION" in neg1 and "HAS_NEGATION" in neg2 else 0.0
+            results["negation_jaccard"] = 1.0 if NEGATION_PLACEHOLDER in neg1 and NEGATION_PLACEHOLDER in neg2 else 0.0
             # Alternative: results["negation_jaccard"] = intersection / union if union > 0 else 1.0 if not neg1 and not neg2 else 0.0
             logger.debug(f"Negations: Set1={len(neg1)}, Set2={len(neg2)}, Match={results['negation_jaccard']:.4f}")
 
@@ -310,8 +311,6 @@ class AMRSimilarityCalculator:
         logger.info("Finished calculating implemented AMR features.")
         return results
 
-
-# --- Main Example Usage ---
 if __name__ == "__main__":
     # --- Configure Rich Logging ---
     logging.root.handlers.clear()
@@ -331,13 +330,6 @@ if __name__ == "__main__":
         except Exception:  # Fallback if rich setup fails
             _rich_available = False  # Ensure flag is false
 
-    if not _use_rich:
-        logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        separator = lambda: print("-" * 70)
-        logger.info("Keyword/Semantic/AMR Example (standard logging - install 'rich' for better output)")
-
-    # --- Flags to Enable/Disable Components ---
-
     # --- Example Paragraphs ---
     para_a = """
     The boy wants to visit the park. He likes green trees.
@@ -350,6 +342,13 @@ if __name__ == "__main__":
     """
     para_empty = ""
 
+    if not _use_rich:
+        logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        separator = lambda: print("-" * 70)
+        logger.info("Keyword/Semantic/AMR Example (standard logging - install 'rich' for better output)")
+
+    # --- Flags to Enable/Disable Components ---
+
     # --- Initialize Components ---
 
     amr_calculator = None
@@ -358,7 +357,7 @@ if __name__ == "__main__":
         logger.info("Initializing AMR Similarity Calculator...")
         # You might need to specify model path: model_dir='/path/to/downloaded/model'
         amr_calculator = AMRSimilarityCalculator(
-            stog_model_dir="/mnt/e/Machine_learning/NLP-Revise/essay_grading/model_parse_xfm_bart_large-v0_1_0",
+            stog_model=STOG_MODEL,  # Use the loaded model
         )  # Reuse device if possible
         # Check if models loaded successfully
         if not amr_calculator.stog_model:
@@ -394,11 +393,13 @@ if __name__ == "__main__":
 
         # --- Print Combined Results for the Pair ---
         logger.info(f"[bold cyan]>>> Combined Results for {description}:[/bold cyan]")
+        logger.info(" Text 1: %s", text1)
+        logger.info(" Text 2: %s", text2)
         for key, value in combined_results.items():
             if isinstance(value, float):
                 # Format floats, potentially add color based on value/type?
                 if "score" in key or "similarity" in key or "jaccard" in key:
-                    color = "green" if value > 0.6 else "yellow" if value > 0.2 else "red"
+                    color = "green" if value > 0.6 else "yellow" if value > 0.2 else "red"  # noqa: PLR2004
                     logger.info(f"  {key}: [{color}]{value:.4f}[/{color}]")
                 else:
                     logger.info(f"  {key}: {value:.4f}")
