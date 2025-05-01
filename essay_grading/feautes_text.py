@@ -156,6 +156,8 @@
 # print("Extracted SRL for Sentence 3:", extract_predicate_arguments_improved(doc3))
 # print("Extracted SRL for Sentence 4:", extract_predicate_arguments_improved(doc4))
 
+s1 = "Education is the passport to the future, for tomorrow belongs to those who prepare for it today."
+s2 = "The future belongs to those who prepare for it today; education is their passport."
 
 import re
 import time
@@ -403,10 +405,99 @@ def compute_plagiarism_score_fast(
     return best_score / denom
 
 
-s1 = "Education is the passport to the future, for tomorrow belongs to those who prepare for it today."
-s2 = "The future belongs to those who prepare for it today; education is their passport."
 pct = compute_plagiarism_score_fast(s1, s2)
 print(f"Fast plagiarism overlap: {pct:.2%}")
+
+
+# Step 1: Tokenize the texts
+def tokenize_text(text):
+    tokens = text.lower().split()  # Split the text into lowercase tokens
+    return set(tokens)
+
+
+# Step 2: Calculate overlap coefficient
+def calculate_overlap_coefficient(text1, text2):
+    set1 = tokenize_text(text1)
+    set2 = tokenize_text(text2)
+    intersection = len(set1.intersection(set2))
+    min_size = min(len(set1), len(set2))
+    overlap_coefficient = intersection / min_size if min_size > 0 else 0.0
+    return overlap_coefficient
+
+
+# Example usage
+overlap_coefficient = calculate_overlap_coefficient(s1, s2)
+
+print("Overlap Coefficient:", overlap_coefficient)
+
+
+# Step 1: Tokenize the texts
+def tokenize_text(text):
+    tokens = text.lower().split()  # Split the text into lowercase tokens
+    return set(tokens)
+
+
+# Step 2: Calculate Sørensen-Dice coefficient
+def calculate_sorensen_dice_coefficient(text1, text2):
+    set1 = tokenize_text(text1)
+    set2 = tokenize_text(text2)
+
+    intersection = len(set1 & set2)
+    total_tokens = len(set1) + len(set2)
+
+    return ((2 * intersection) / total_tokens) if total_tokens > 0 else 0.0
+
+
+dice_coefficient = calculate_sorensen_dice_coefficient(s1, s2)
+
+print("Sørensen-Dice Coefficient:", dice_coefficient)
+
+
+import spacy
+import networkx as nx
+
+# Load the spaCy model
+nlp = spacy.load("en_core_web_sm")
+
+# Step 1: Create semantic graph for text
+def create_semantic_graph(text):
+    doc = nlp(text)
+    graph = nx.Graph()
+    for token in doc:
+        # Add nodes for tokens
+        graph.add_node(token.i, text=token.text, lemma=token.lemma_, pos=token.pos_)
+        # Add edges between tokens and their dependencies
+        for child in token.children:
+            graph.add_edge(token.i, child.i, label=child.dep_)
+    return graph
+
+# Step 2: Calculate similarity between semantic graphs
+def calculate_graph_similarity(graph1, graph2):
+    # Extract sets of nodes and edges from the graphs
+    nodes1 = set(graph1.nodes)
+    nodes2 = set(graph2.nodes)
+    edges1 = set(graph1.edges)
+    edges2 = set(graph2.edges)
+    # Calculate Jaccard similarity coefficient
+    jaccard_similarity_nodes = len(nodes1.intersection(nodes2)) / len(nodes1.union(nodes2))
+    jaccard_similarity_edges = len(edges1.intersection(edges2)) / len(edges1.union(edges2))
+    # Combine node and edge similarities using a weighted sum or another method
+    # Here, we'll use a simple average
+    jaccard_similarity = (jaccard_similarity_nodes + jaccard_similarity_edges) / 2
+    return jaccard_similarity
+
+# Example usage
+
+# Step 1: Create semantic graphs for both texts
+graph1 = create_semantic_graph(s1)
+graph2 = create_semantic_graph(s2)
+
+# Step 2: Calculate similarity between semantic graphs
+graph_similarity = calculate_graph_similarity(graph1, graph2)
+
+print("Graph Similarity:", graph_similarity)
+
+
 
 import re
 
@@ -502,7 +593,7 @@ def build_feature_matrix(model_answers: List[str], student_texts: List[str]) -> 
     # 1) Compute batch lexical features for all students at once
     batch_feats = extract_lexical_features(model_answers, student_texts)
     return batch_feats
-    # 2) Compute Smith–Waterman overlap per student
+    # 2) Compute Smith  Waterman overlap per student
     # sw_feats = [max(compute_plagiarism_score(text, m) for m in model_answers) for text in student_texts]
 
     # 3) Merge into a feature matrix

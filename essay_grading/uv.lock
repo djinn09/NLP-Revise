@@ -110,6 +110,19 @@ wheels = [
 ]
 
 [[package]]
+name = "cmudict"
+version = "1.0.32"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "importlib-metadata" },
+    { name = "importlib-resources" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1b/d1/c32478997451c1c7cbf07b663845972812ca9ce678d228f4cd2bac5d2e32/cmudict-1.0.32.tar.gz", hash = "sha256:e84a587bb610b3a837a93f07494e874860cf205ea7f23db652b871093a699f38", size = 935959, upload_time = "2024-12-21T21:19:45.193Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fa/ff/617bdeab02c2ce0384e64a5bb00ec479322dbf019491def68af6a860733d/cmudict-1.0.32-py3-none-any.whl", hash = "sha256:b9323664d49d128193c480ec97a3270ab2162469289bb26e950d13b2ef661c41", size = 939412, upload_time = "2024-12-21T21:19:42.287Z" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -172,6 +185,7 @@ dependencies = [
     { name = "scipy" },
     { name = "sentence-transformers" },
     { name = "strsim" },
+    { name = "textstat" },
 ]
 
 [package.metadata]
@@ -187,6 +201,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.15.2" },
     { name = "sentence-transformers", specifier = ">=4.1.0" },
     { name = "strsim", specifier = "==0.0.3" },
+    { name = "textstat", specifier = ">=0.7.5" },
 ]
 
 [[package]]
@@ -250,6 +265,27 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f1/70/7703c29685631f5a7590aa73f1f1d3fa9a380e654b86af429e0934a32f7d/idna-3.10.tar.gz", hash = "sha256:12f65c9b470abda6dc35cf8e63cc574b1c52b11df2c86030af0ac09b01b13ea9", size = 190490, upload_time = "2024-09-15T18:07:39.745Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/76/c6/c88e154df9c4e1a2a66ccf0005a88dfb2650c1dffb6f5ce603dfbd452ce3/idna-3.10-py3-none-any.whl", hash = "sha256:946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3", size = 70442, upload_time = "2024-09-15T18:07:37.964Z" },
+]
+
+[[package]]
+name = "importlib-metadata"
+version = "8.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "zipp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/76/66/650a33bd90f786193e4de4b3ad86ea60b53c89b669a5c7be931fac31cdb0/importlib_metadata-8.7.0.tar.gz", hash = "sha256:d13b81ad223b890aa16c5471f2ac3056cf76c5f10f82d6f9292f0b415f389000", size = 56641, upload_time = "2025-04-27T15:29:01.736Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/20/b0/36bd937216ec521246249be3bf9855081de4c5e06a0c9b4219dbeda50373/importlib_metadata-8.7.0-py3-none-any.whl", hash = "sha256:e5dd1551894c77868a30651cef00984d50e1002d06942a7101d34870c5f02afd", size = 27656, upload_time = "2025-04-27T15:29:00.214Z" },
+]
+
+[[package]]
+name = "importlib-resources"
+version = "6.5.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cf/8c/f834fbf984f691b4f7ff60f50b514cc3de5cc08abfc3295564dd89c5e2e7/importlib_resources-6.5.2.tar.gz", hash = "sha256:185f87adef5bcc288449d98fb4fba07cea78bc036455dd44c5fc4a2fe78fed2c", size = 44693, upload_time = "2025-01-03T18:51:56.698Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a4/ed/1f1afb2e9e7f38a545d628f864d562a5ae64fe6f7a10e28ffb9b185b4e89/importlib_resources-6.5.2-py3-none-any.whl", hash = "sha256:789cfdc3ed28c78b67a06acb8126751ced69a3d5f79c095a98298cd8a760ccec", size = 37461, upload_time = "2025-01-03T18:51:54.306Z" },
 ]
 
 [[package]]
@@ -841,6 +877,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyphen"
+version = "0.17.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/56/e4d7e1bd70d997713649c5ce530b2d15a5fc2245a74ca820fc2d51d89d4d/pyphen-0.17.2.tar.gz", hash = "sha256:f60647a9c9b30ec6c59910097af82bc5dd2d36576b918e44148d8b07ef3b4aa3", size = 2079470, upload_time = "2025-01-20T13:18:36.296Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7b/1f/c2142d2edf833a90728e5cdeb10bdbdc094dde8dbac078cee0cf33f5e11b/pyphen-0.17.2-py3-none-any.whl", hash = "sha256:3a07fb017cb2341e1d9ff31b8634efb1ae4dc4b130468c7c39dd3d32e7c3affd", size = 2079358, upload_time = "2025-01-20T13:18:29.629Z" },
+]
+
+[[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
 source = { registry = "https://pypi.org/simple" }
@@ -1246,6 +1291,20 @@ wheels = [
 ]
 
 [[package]]
+name = "textstat"
+version = "0.7.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cmudict" },
+    { name = "pyphen" },
+    { name = "setuptools" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d8/e7/8fc80e94187c77a0e06da4845f1cb1b6198fa4da2ca8ba9b36b154e7acc2/textstat-0.7.5.tar.gz", hash = "sha256:a216038406c609aafe5cc607180fcb85c47a96d1109bd26f56b13122daca07a1", size = 110863, upload_time = "2025-02-05T21:06:34.088Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/61/4e/7a072210c25258b225ccb427f12267622cdcc747b003b5aacf60febbdff5/textstat-0.7.5-py3-none-any.whl", hash = "sha256:37bb8ea028ef1fdf3eaf29ba005ab4cad302477f9774bdce4c7b0f66296cf370", size = 105301, upload_time = "2025-02-05T21:06:31.413Z" },
+]
+
+[[package]]
 name = "threadpoolctl"
 version = "3.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1420,4 +1479,13 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/6c/63/53559446a878410fc5a5974feb13d31d78d752eb18aeba59c7fef1af7598/wcwidth-0.2.13.tar.gz", hash = "sha256:72ea0c06399eb286d978fdedb6923a9eb47e1c486ce63e9b4e64fc18303972b5", size = 101301, upload_time = "2024-01-06T02:10:57.829Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fd/84/fd2ba7aafacbad3c4201d395674fc6348826569da3c0937e75505ead3528/wcwidth-0.2.13-py2.py3-none-any.whl", hash = "sha256:3da69048e4540d84af32131829ff948f1e022c1c6bdb8d6102117aac784f6859", size = 34166, upload_time = "2024-01-06T02:10:55.763Z" },
+]
+
+[[package]]
+name = "zipp"
+version = "3.21.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/50/bad581df71744867e9468ebd0bcd6505de3b275e06f202c2cb016e3ff56f/zipp-3.21.0.tar.gz", hash = "sha256:2c9958f6430a2040341a52eb608ed6dd93ef4392e02ffe219417c1b28b5dd1f4", size = 24545, upload_time = "2024-11-10T15:05:20.202Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b7/1a/7e4798e9339adc931158c9d69ecc34f5e6791489d469f5e50ec15e35f458/zipp-3.21.0-py3-none-any.whl", hash = "sha256:ac1bbe05fd2991f160ebce24ffbac5f6d11d83dc90891255885223d42b3cd931", size = 9630, upload_time = "2024-11-10T15:05:19.275Z" },
 ]
