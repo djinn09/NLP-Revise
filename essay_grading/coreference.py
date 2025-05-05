@@ -59,6 +59,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Dict, List, Tuple  # Import necessary types for annotation
+
 import gender_guesser.detector as gender
 import spacy
 from spacy.tokens import Token
@@ -432,108 +434,178 @@ def is_pleonastic_it(token: Token) -> bool:
 # Make sure to call the function with the updated helpers integrated.
 
 
-def rule_based_coref_resolution_v4(  # Renamed function
-    text: str, similarity_threshold: float = 0.5, use_similarity_fallback: bool = False, search_sentences: int = 2
-):
-    """Applies v4 rule-based coreference resolution with Unspecified Gender handling."""
+# --- Main Resolution Function ---
+def rule_based_coref_resolution_v4(
+    text: str,
+    similarity_threshold: float = 0.5,
+    *,
+    use_similarity_fallback: bool = False,
+    search_sentences: int = 2,
+) -> List[Tuple[Dict[str, Any], Dict[str, Any], float, str]]:
+    """Apply v4 rule-based coreference resolution with Unspecified Gender handling.
+
+    Identifies coreferent mentions (pronouns, proper nouns) and links them to
+    their likely antecedents within a specified sentence window, using rules
+    based on syntax, NER, morphology, and heuristics.
+
+    Args:
+        text (str): The input text document.
+        similarity_threshold (float): Minimum word vector similarity for fallback rule.
+                                      Only used if `use_similarity_fallback` is True.
+        use_similarity_fallback (bool): Enable/disable similarity fallback rule.
+        search_sentences (int): Number of sentences (current + preceding N-1)
+                                to search backwards for antecedents.
+
+    Returns:
+        List[Tuple[Dict[str, Any], Dict[str, Any], float, str]]:
+            A list of resolved coreference pairs. Each tuple contains:
+            (
+                {'text': str, 'start': int, 'end': int}, # Mention span info
+                {'text': str, 'start': int, 'end': int}, # Antecedent span info
+                float,                                  # Confidence score (0.0-1.0)
+                str                                     # Rule/heuristic name triggering the match
+            )
+
+    """
+    # Process the text with SpaCy NLP pipeline
     doc = nlp(text)
+    # List to store results internally (using Token objects)
     coref_results_internal = []
+    # Set to keep track of mention token indices that have already been resolved
     processed_mentions = set()
 
-    # --- Processing Loop (Identical structure to v3) ---
+    # --- Processing Loop: Iterate through sentences and tokens ---
     for sent_idx, sentence in enumerate(doc.sents):
+        # Define the start token index for the backward search window
         start_search_token_idx = 0
         if search_sentences > 1 and sent_idx > 0:
-            sents_list = list(doc.sents)
+            sents_list = list(doc.sents)  # Need list access for indexing
             first_sent_idx_in_window = max(0, sent_idx - search_sentences + 1)
             start_search_token_idx = sents_list[first_sent_idx_in_window].start
 
+        # Iterate through tokens within the current sentence
         for i in range(sentence.start, sentence.end):
-            token = doc[i]
+            token = doc[i]  # The current token being checked as a potential mention
+
+            # Skip if this token has already been resolved as a mention
             if token.i in processed_mentions:
                 continue
 
-            antecedent = None
-            confidence = 0.0
-            rule = "N/A"
-            best_candidate_info = None
+            # Variables to store the resolution result for this token
+            antecedent = None  # The resolved antecedent Token object
+            confidence = 0.0  # Confidence score of the resolution
+            rule = "N/A"  # Name of the rule/heuristic that triggered the match
+            best_candidate_info = None  # Stores best candidate from backward searches
 
             # --- A. Pronoun Resolution ---
+            # Identify pronoun type based on fine-grained POS tag
             is_personal_pronoun = token.tag_ == "PRP"
             is_possessive_pronoun = token.tag_ == "PRP$"
-            is_relative_possessive = token.tag_ == "WP$"
-            is_relative_nonpossessive = token.tag_ in ["WP", "WDT"]
-            is_reflexive_pronoun = is_reflexive(token)
+            is_relative_possessive = token.tag_ == "WP$"  # 'whose'
+            is_relative_nonpossessive = token.tag_ in ["WP", "WDT"]  # 'who', 'which', 'that'
+            is_reflexive_pronoun = is_reflexive(token)  # Check lemma ends with 'self'
 
+            # Only proceed if the token is some kind of pronoun
             if is_personal_pronoun or is_possessive_pronoun or is_relative_possessive or is_relative_nonpossessive:
-                # Rule 0: Skip Pleonastic 'It'
+                # Rule 0: Skip Pleonastic 'It' - Check before trying to resolve 'it'
                 if token.lemma_ == "it" and is_pleonastic_it(token):
-                    processed_mentions.add(token.i)
-                    continue
+                    processed_mentions.add(token.i)  # Mark as processed (but not resolved)
+                    continue  # Move to the next token
 
-                # Rule 1: Reflexive
+                # --- High-Confidence Rules (Applied First) ---
+
+                # Rule 1: Reflexive Pronoun Resolution
                 if is_reflexive_pronoun:
-                    subj = find_subject(token)
+                    subj = find_subject(token)  # Find subject of the reflexive's clause
                     if subj:
                         antecedent = subj
                         confidence = 0.95
                         rule = "Reflexive Pronoun -> Subject"
 
-                # Rule 2a: Relative Non-Possessive ('who', 'which', 'that')
+                # Rule 2a: Relative Non-Possessive Pronoun Resolution ('who', 'which', 'that')
+                # Link to the syntactic head noun phrase
                 elif is_relative_nonpossessive:
-                    potential_antecedent = token.head
+                    potential_antecedent = token.head  # Initial head from parser
+                    # Adjust head if it's a preposition, auxiliary, or intermediate verb
                     if potential_antecedent.pos_ in ("ADP", "AUX", "VERB"):
                         potential_antecedent = potential_antecedent.head
+                    # Check if adjusted head is a valid antecedent type
                     if potential_antecedent.pos_ in {"NOUN", "PROPN", "PRON"}:
-                        agrees, _ = check_agreement(token, potential_antecedent)  # Uses NEW check_agreement
+                        # Check agreement (handles 'who' vs PERSON, 'which' vs non-PERSON)
+                        agrees, _ = check_agreement(token, potential_antecedent)
                         if agrees:
                             antecedent = potential_antecedent
                             confidence = 0.92
                             rule = "Relative Pronoun -> Syntactic Head"
 
-                # Rule 3: Quoted Speech Pronouns ('I', 'me', 'my', 'we', 'us', 'our')
+                # Rule 3: Quoted Speech Pronoun Resolution ('I', 'me', 'my', 'we', 'us', 'our')
+                # Check before general possessive/personal rules for these lemmas
                 if not antecedent and token.lemma_ in {"i", "me", "my", "we", "us", "our"}:
-                    speaker = find_speaker(token)  # Uses NEW find_speaker
+                    speaker = find_speaker(token)  # Attempt to find the speaker
                     if speaker:
-                        agrees, _ = check_agreement(token, speaker)  # Uses NEW check_agreement
+                        # Check agreement between pronoun and speaker
+                        agrees, _ = check_agreement(token, speaker)
                         if agrees:
                             antecedent = speaker
                             confidence = 0.90
                             rule = "Quoted Pronoun -> Speaker"
 
-                # Rule 2b / 4: Possessive / Relative 'whose'
+                # --- Lower-Confidence Rules (Backward Search) ---
+                # Run only if no high-confidence rule found an antecedent yet
+
+                # Rule 2b / 4: Possessive Pronouns ('his', 'her', 'its', 'their') + Relative 'whose'
+                # Search backwards for the *possessor* entity.
                 elif not antecedent and (is_possessive_pronoun or is_relative_possessive):
+                    # List to hold potential candidates found during backward search
                     potential_candidates = []
+                    # Determine rule name based on pronoun type
                     search_rule_name = (
                         "Possessive Antecedent" if is_possessive_pronoun else "Relative Possessive (whose) Antecedent"
                     )
-                    for j in range(token.i - 1, start_search_token_idx - 1, -1):  # Backward search loop
+
+                    # Iterate backwards from the token before the mention within the search window
+                    for j in range(token.i - 1, start_search_token_idx - 1, -1):
                         if j < 0:
-                            break
-                        candidate = doc[j]
+                            break  # Safety break
+                        candidate = doc[j]  # The potential antecedent token
+
+                        # Basic filtering: Candidate must be Noun, Pronoun, or Proper Noun, and not reflexive
                         if candidate.pos_ not in {"NOUN", "PROPN", "PRON"} or is_reflexive(candidate):
                             continue
-                        agrees, _ = check_agreement(token, candidate)  # Uses NEW check_agreement
+
+                        # Check grammatical agreement (number, gender) for the possessor
+                        agrees, _ = check_agreement(token, candidate)
                         if not agrees:
                             continue
-                        # Scoring (unchanged from v3 except uses new check_agreement implicitly)
-                        cand_score = 0.05
-                        cand_rule_detail = ""
+
+                        # --- Candidate Scoring ---
+                        cand_score = 0.05  # Base score for passing agreement
+                        cand_rule_detail = ""  # Details to append to rule name
+
+                        # Named Entity Bonus (PERSON preferred)
                         if candidate.ent_type_ == "PERSON":
                             cand_score = max(cand_score, 0.75)
                         elif candidate.ent_type_:
                             cand_score = max(cand_score, 0.65)
+
+                        # Subject Salience Bonus
                         if candidate.dep_ in ("nsubj", "nsubjpass"):
                             subject_bonus = 0.15
                             cand_score += subject_bonus
                             cand_rule_detail += " (Subject)"
+
+                        # Pronoun Candidate Penalty (discourage linking pronouns to other pronouns)
                         if candidate.lemma_ in PERSONAL_PRONOUN_LEMMAS:
-                            cand_score *= 0.70
+                            cand_score *= 0.70  # Reduce score
+
+                        # Proximity Decay (closer candidates get higher scores)
                         distance = token.i - candidate.i
-                        proximity_factor = max(0.1, 1.0 - (distance / 50.0))
+                        proximity_factor = max(0.1, 1.0 - (distance / 50.0))  # Decay faster
                         cand_score *= proximity_factor
-                        cand_score = min(cand_score, 1.0)
-                        if cand_score > 0.05:
+                        cand_score = min(cand_score, 1.0)  # Cap score
+
+                        # Add candidate to list if score is above minimum threshold
+                        if cand_score > 0.05:  # noqa: PLR2004
                             potential_candidates.append(
                                 {
                                     "token": candidate,
@@ -542,25 +614,35 @@ def rule_based_coref_resolution_v4(  # Renamed function
                                     "distance": distance,
                                 }
                             )
+                    # After searching, select the best candidate (highest score, then closest)
                     if potential_candidates:
                         potential_candidates.sort(key=lambda x: (-x["score"], x["distance"]))
-                        best_candidate_info = potential_candidates[0]
+                        best_candidate_info = potential_candidates[0]  # Store best candidate dict
 
-                # Rule 5: Standard Personal Pronouns
+                # Rule 5: Standard Personal Pronouns ('he', 'she', 'it', 'they')
+                # General backward search applying multiple heuristics.
                 elif not antecedent and is_personal_pronoun:
                     potential_candidates = []
-                    for j in range(token.i - 1, start_search_token_idx - 1, -1):  # Backward search loop
+                    # Iterate backwards
+                    for j in range(token.i - 1, start_search_token_idx - 1, -1):
                         if j < 0:
                             break
                         candidate = doc[j]
+
+                        # Basic filtering
                         if candidate.pos_ not in {"NOUN", "PROPN", "PRON"} or is_reflexive(candidate):
                             continue
-                        agrees, is_singular_they = check_agreement(token, candidate)  # Uses NEW check_agreement
+
+                        # Check agreement (number, gender, singular they)
+                        agrees, is_singular_they = check_agreement(token, candidate)
                         if not agrees:
                             continue
-                        # Scoring (unchanged from v3 except uses new check_agreement implicitly)
-                        cand_score = 0.15
-                        cand_rule_detail = "Agreement"
+
+                        # --- Candidate Scoring ---
+                        cand_score = 0.15  # Base score for agreement (higher for std pronouns)
+                        cand_rule_detail = "Agreement"  # Base rule name
+
+                        # Named Entity Bonus
                         if candidate.ent_type_:
                             if candidate.ent_type_ == "PERSON" and (token.lemma_ in ["he", "she", "they"]):
                                 cand_score = max(cand_score, 0.70)
@@ -568,33 +650,52 @@ def rule_based_coref_resolution_v4(  # Renamed function
                             elif token.lemma_ == "it" and candidate.ent_type_ and candidate.ent_type_ != "PERSON":
                                 cand_score = max(cand_score, 0.65)
                                 cand_rule_detail = "NER Non-PERSON ('it')"
-                        if is_singular_they and cand_score < 0.70:
-                            cand_score = max(cand_score, 0.75)
+
+                        # Singular They Bonus (if agreement check flagged it)
+                        if is_singular_they and cand_score < 0.70:  # Apply if NER didn't already give high score
+                            cand_score = max(cand_score, 0.75)  # Strong boost
                             cand_rule_detail = "Singular They Match"
+
+                        # Subject Salience Bonus
                         if candidate.dep_ in ("nsubj", "nsubjpass"):
                             subject_bonus = 0.15
                             cand_score += subject_bonus
+                            # Adjust rule detail name
                             cand_rule_detail += " (Subject)" if cand_rule_detail != "Agreement" else "Subject Salience"
+
+                        # Pronoun Candidate Penalty
                         if candidate.lemma_ in PERSONAL_PRONOUN_LEMMAS:
                             cand_score *= 0.70
+
+                        # Proximity Decay
                         distance = token.i - candidate.i
                         proximity_factor = max(0.1, 1.0 - (distance / 75.0))
                         cand_score *= proximity_factor
                         cand_score = min(cand_score, 1.0)
+
+                        # Adjust rule name if only agreement + proximity contributed significantly
                         if cand_rule_detail == "Agreement":
                             cand_rule_detail += " + Proximity"
-                        if use_similarity_fallback and cand_score < similarity_threshold:  # Similarity fallback...
+
+                        # Semantic Similarity Fallback (Optional)
+                        if use_similarity_fallback and cand_score < similarity_threshold:
                             try:
+                                # Calculate similarity using word vectors
                                 similarity = token.similarity(candidate)
                                 if similarity >= similarity_threshold:
+                                    # Scale similarity to a score contribution
                                     sim_score = (
                                         0.1 + (similarity - similarity_threshold) / (1.0 - similarity_threshold) * 0.3
                                     )
-                                    cand_score = max(cand_score, sim_score)
-                                    cand_rule_detail = f"Similarity ({similarity:.2f})"
+                                    # Only use similarity if it improves the score
+                                    if sim_score > cand_score:
+                                        cand_score = max(cand_score, sim_score)
+                                        cand_rule_detail = f"Similarity ({similarity:.2f})"
                             except UserWarning:
-                                pass
-                        if cand_score > 0.05:
+                                pass  # Ignore warnings if vectors are missing
+
+                        # Add candidate if score is above minimum threshold
+                        if cand_score > 0.05:  # noqa: PLR2004
                             potential_candidates.append(
                                 {
                                     "token": candidate,
@@ -603,24 +704,31 @@ def rule_based_coref_resolution_v4(  # Renamed function
                                     "distance": distance,
                                 }
                             )
+                    # Select best candidate
                     if potential_candidates:
                         potential_candidates.sort(key=lambda x: (-x["score"], x["distance"]))
                         best_candidate_info = potential_candidates[0]
 
-                # Set antecedent from backward search if found & no specific rule applied
+                # --- Set antecedent from best candidate if found in backward search ---
+                # This runs if a backward search (Rule 2b/4 or Rule 5) found candidates,
+                # and no high-priority rule (Rule 1, 2a, 3) already set the antecedent.
                 if best_candidate_info and not antecedent:
                     antecedent = best_candidate_info["token"]
                     confidence = best_candidate_info["score"]
                     rule = best_candidate_info["reason"]
 
-            # --- B. Proper Noun (PN) Coreference ---
+            # --- B. Proper Noun (PN) Coreference Logic ---
+            # Check if the current token is a proper noun
             elif token.pos_ == "PROPN":
-                potential_pn_antecedents = []
-                for j in range(token.i - 1, start_search_token_idx - 1, -1):  # Backward search loop
+                potential_pn_antecedents = []  # Store candidate dicts
+                # Search backwards for potential PN antecedents
+                for j in range(token.i - 1, start_search_token_idx - 1, -1):
                     if j < 0:
                         break
                     candidate = doc[j]
+                    # Candidate must be PERSON Proper Noun for this simple rule
                     if candidate.pos_ == "PROPN" and candidate.ent_type_ == "PERSON":
+                        # Case 1: Exact Match
                         if candidate.text == token.text:
                             potential_pn_antecedents.append(
                                 {
@@ -631,9 +739,12 @@ def rule_based_coref_resolution_v4(  # Renamed function
                                     "distance": token.i - j,
                                 }
                             )
+                        # Case 2: Partial Match (Full Name -> Last Name)
                         candidate_is_longer = len(candidate.text.split()) > 1
                         token_is_shorter = len(token.text.split()) == 1
+                        # Check if candidate ends with the token text (e.g., "John Smith" ends with "Smith")
                         if candidate_is_longer and token_is_shorter and candidate.text.endswith(token.text):
+                            # Check if token is likely standalone (not preceded immediately by another PROPN)
                             prev_token = doc[token.i - 1] if token.i > 0 else None
                             likely_standalone = not (
                                 prev_token and prev_token.pos_ == "PROPN" and prev_token.ent_iob_ != "O"
@@ -643,106 +754,124 @@ def rule_based_coref_resolution_v4(  # Renamed function
                                     {
                                         "token": candidate,
                                         "score": 0.95,
-                                        "type": "Partial",
+                                        "type": "Partial",  # Slightly lower score than exact
                                         "rule": "PN Partial Match (Last)",
                                         "distance": token.i - j,
                                     }
                                 )
+                # Select the best PN match
                 if potential_pn_antecedents:
+                    # Sort by score (desc), then distance (asc)
                     potential_pn_antecedents.sort(key=lambda x: (-x["score"], x["distance"]))
-                    best_pn_match_info = potential_pn_antecedents[0]
-                    if best_pn_match_info["type"] == "Exact":  # Check for override
+                    best_pn_match_info = potential_pn_antecedents[0]  # Tentative best (highest score/closest)
+
+                    # *** PN Selection Override: Prioritize Partial over Exact ***
+                    # If the best match is Exact, check if a corresponding Partial match exists
+                    if best_pn_match_info["type"] == "Exact":
                         for cand_info in potential_pn_antecedents:
+                            # If a Partial match exists whose antecedent *contains* the Exact match's text
                             if (
                                 cand_info["type"] == "Partial"
                                 and best_pn_match_info["token"].text in cand_info["token"].text.split()
                             ):
-                                best_pn_match_info = cand_info
-                                break
+                                best_pn_match_info = cand_info  # Override with the partial match
+                                break  # Found the preferred partial match
+
+                    # Final check and assignment
                     best_pn_token = best_pn_match_info["token"]
+                    # Avoid self-reference and linking to already processed mentions
                     if best_pn_token.i != token.i and best_pn_token.i not in processed_mentions:
                         antecedent = best_pn_token
                         confidence = best_pn_match_info["score"]
                         rule = best_pn_match_info["rule"]
 
-            # --- Store Result ---
+            # --- Store Result (Internal Token Format) ---
+            # If an antecedent was found for the current token, store the pair
             if antecedent and antecedent.i != token.i:
                 coref_results_internal.append((token, antecedent, round(confidence, 2), rule))
+                # Mark this token as processed so it isn't considered as an antecedent later
                 processed_mentions.add(token.i)
 
-    # --- Convert to Final Output Format ---
+    # --- Convert results to final output format with indices ---
     coref_pairs_with_indices = []
+    # Iterate through the resolved pairs (stored with Token objects)
     for mention_tok, ant_tok, conf, rule_name in coref_results_internal:
+        # Create dictionary for mention span with text and char indices
         mention_span = {
             "text": mention_tok.text,
-            "start": mention_tok.idx,
-            "end": mention_tok.idx + len(mention_tok.text),
+            "start": mention_tok.idx,  # Character offset of the token's start
+            "end": mention_tok.idx + len(mention_tok.text),  # Character offset of the token's end
         }
+        # Create dictionary for antecedent span with text and char indices
         antecedent_span = {"text": ant_tok.text, "start": ant_tok.idx, "end": ant_tok.idx + len(ant_tok.text)}
+        # Append the formatted tuple to the final list
         coref_pairs_with_indices.append((mention_span, antecedent_span, conf, rule_name))
 
     return coref_pairs_with_indices
 
+if __name__ == "__main__":
+    print("This module is not intended to be run directly.")  # noqa: T201
 
-# --- Testing ---
-# [Include the same testing samples and loop as before]
-samples_expert = {
-    "Pleonastic It": "It is raining heavily today. It seems that the game will be cancelled.",
-    "Relative Who": "The man who arrived late missed the announcement.",  # who -> man
-    "Relative Which": "The report, which detailed the findings, was released.",  # which -> report
-    "Relative Whose": "The artist whose painting won the prize was ecstatic.",  # whose -> artist
-    "Subject Salience": "The cat chased the mouse. It was fast.",  # It -> cat (subject likely preferred over mouse)
-    "Possessive His": "John loves his dog.",  # his -> John
-    "Possessive Its": "The company announced its profits.",  # its -> company
-    "Quote Possessive": 'Mary said, "My car is blue."',  # My -> Mary
-    "PN Partial Refined": "Professor John Smith presented. Later, Smith answered questions. Jane Smith watched.",  # Smith -> John Smith (not Jane Smith)
-    "Complex Sentence": "Although the team lost, they showed great spirit, which pleased their coach.",  # they->team, which->spirit?, their->team
-    "Weather/Time It": "It is snowing and it is almost noon.",
-    "Cleft It": "It was Susan who solved the puzzle.",  # It -> Pleonastic, who -> Susan
-}
-samples_advanced = {
-    "Appositive": "The CEO of the company, John, gave a speech. He emphasized the importance of innovation.",
-    "Possessive": "John's car is red. It is fast.",  # It -> car
-    "Definite Description": "The president gave a speech. He emphasized unity.",
-    "Simple Morphology": "Sarah went to the market. She bought fruits.",
-    "Mixed Case": "My friend Lisa arrived. She said that the party was fun. Lisa loves dancing.",
-    "Plural": "The developers released the software. They were proud of it.",  # They -> developers, it -> software
-    "Reflexive": "The manager told himself to stay calm.",
-    "It ambiguity": "We poured water into the cup until it was full.",  # it -> cup
-    "Singular They": "My friend mentioned their new job. They seem happy.",  # They -> friend
-    "Complex": "Alice told Bob that she liked his new car, but he thought it was too flashy.",  # she->Alice, his->Bob(possessive), he->Bob, it->car
-    "Quote Simple": 'Mary said, "I need coffee."',  # I -> Mary
-    "Quote Complex": 'John asked his team, "Can we finish this today?" They replied affirmatively.',  # we -> team? John+team?, They -> team
-    "Quote Nested": "The report stated, \"The witness claimed, 'He saw the suspect.'\" He later recanted.",  # He (inner) -> witness? suspect?, He (outer) -> witness?
-    "Sentence Window": "Peter called Mike. He was happy. Later, Susan arrived. She brought cake.",  # He->Peter, She->Susan (test windowing)
-    "Proper Noun Repeat": "Dr. Evelyn Reed published her findings. Reed argued for a new approach.",  # Reed -> Dr. Evelyn Reed
-    "Proper Noun Partial": "Chairman John Smith entered. Smith looked tired.",  # Smith -> John Smith
-}
-all_samples = {**samples_advanced, **samples_expert}
+    # --- Testing ---
+    # [Include the same testing samples and loop as before]
+    samples_expert = {
+        "Pleonastic It": "It is raining heavily today. It seems that the game will be cancelled.",
+        "Relative Who": "The man who arrived late missed the announcement.",  # who -> man
+        "Relative Which": "The report, which detailed the findings, was released.",  # which -> report
+        "Relative Whose": "The artist whose painting won the prize was ecstatic.",  # whose -> artist
+        "Subject Salience": "The cat chased the mouse. It was fast.",  # It -> cat (subject likely preferred over mouse)
+        "Possessive His": "John loves his dog.",  # his -> John
+        "Possessive Its": "The company announced its profits.",  # its -> company
+        "Quote Possessive": 'Mary said, "My car is blue."',  # My -> Mary
+        "PN Partial Refined": "Professor John Smith presented. Later, Smith answered questions. Jane Smith watched.",  # Smith -> John Smith (not Jane Smith)
+        "Complex Sentence": "Although the team lost, they showed great spirit, which pleased their coach.",  # they->team, which->spirit?, their->team
+        "Weather/Time It": "It is snowing and it is almost noon.",
+        "Cleft It": "It was Susan who solved the puzzle.",  # It -> Pleonastic, who -> Susan
+    }
+    samples_advanced = {
+        "Appositive": "The CEO of the company, John, gave a speech. He emphasized the importance of innovation.",
+        "Possessive": "John's car is red. It is fast.",  # It -> car
+        "Definite Description": "The president gave a speech. He emphasized unity.",
+        "Simple Morphology": "Sarah went to the market. She bought fruits.",
+        "Mixed Case": "My friend Lisa arrived. She said that the party was fun. Lisa loves dancing.",
+        "Plural": "The developers released the software. They were proud of it.",  # They -> developers, it -> software
+        "Reflexive": "The manager told himself to stay calm.",
+        "It ambiguity": "We poured water into the cup until it was full.",  # it -> cup
+        "Singular They": "My friend mentioned their new job. They seem happy.",  # They -> friend
+        "Complex": "Alice told Bob that she liked his new car, but he thought it was too flashy.",  # she->Alice, his->Bob(possessive), he->Bob, it->car
+        "Quote Simple": 'Mary said, "I need coffee."',  # I -> Mary
+        "Quote Complex": 'John asked his team, "Can we finish this today?" They replied affirmatively.',  # we -> team? John+team?, They -> team
+        "Quote Nested": "The report stated, \"The witness claimed, 'He saw the suspect.'\" He later recanted.",  # He (inner) -> witness? suspect?, He (outer) -> witness?
+        "Sentence Window": "Peter called Mike. He was happy. Later, Susan arrived. She brought cake.",  # He->Peter, She->Susan (test windowing)
+        "Proper Noun Repeat": "Dr. Evelyn Reed published her findings. Reed argued for a new approach.",  # Reed -> Dr. Evelyn Reed
+        "Proper Noun Partial": "Chairman John Smith entered. Smith looked tired.",  # Smith -> John Smith
+    }
+    all_samples = {**samples_advanced, **samples_expert}
 
 
-print("--- Running Coreference Resolution v4 (Unspecified Gender) ---")
-for description, text in all_samples.items():
-    print(f"\n--- [{description}] ---")
-    print(f"Text: {text}")
-    try:
-        pairs_with_indices = rule_based_coref_resolution_v4(
-            text, search_sentences=2, use_similarity_fallback=False
-        )  # Call v4 function
-        print(f"Coreference pairs (Mention Span, Antecedent Span, Confidence, Rule):")
-        if pairs_with_indices:
-            for pair in pairs_with_indices:
-                mention_span, antecedent_span, conf, rule = pair
-                print(
-                    f"  - Mention: '{mention_span['text']}' ({mention_span['start']}:{mention_span['end']}) -> "
-                    f"Antecedent: '{antecedent_span['text']}' ({antecedent_span['start']}:{antecedent_span['end']}) "
-                    f"(Conf: {conf:.2f}, Rule: {rule})"
-                )
-        else:
-            print("  No pairs found.")
+    print("--- Running Coreference Resolution v4 (Comments & Annotations) ---")  # noqa: T201
+    for description, text in all_samples.items():
+        print(f"\n--- [{description}] ---")  # noqa: T201
+        print(f"Text: {text}")  # noqa: T201
+        try:
+            # Call the main resolution function
+            pairs_with_indices = rule_based_coref_resolution_v4(text, search_sentences=2, use_similarity_fallback=False)
+            print("Coreference pairs (Mention Span, Antecedent Span, Confidence, Rule):")  # noqa: T201
+            if pairs_with_indices:
+                # Print results in the desired format
+                for pair in pairs_with_indices:
+                    mention_span, antecedent_span, conf, rule = pair
+                    print(  # noqa: T201
+                        f"  - Mention: '{mention_span['text']}' ({mention_span['start']}:{mention_span['end']}) -> "
+                        f"Antecedent: '{antecedent_span['text']}' ({antecedent_span['start']}:{antecedent_span['end']}) "
+                        f"(Conf: {conf:.2f}, Rule: {rule})",
+                    )
+            else:
+                print("  No pairs found.")  # noqa: T201
 
-    except Exception as e:
-        print(f"\n!!! An error occurred processing '{description}': {e} !!!")
-        import traceback
+        except Exception as e:
+            # Basic error handling for the loop
+            print(f"\n!!! An error occurred processing '{description}': {e} !!!")  # noqa: T201
+            import traceback
 
-        traceback.print_exc()
+            traceback.print_exc()
