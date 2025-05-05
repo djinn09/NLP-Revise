@@ -1,7 +1,67 @@
+# ------------------------------------------------------------------------------
+# Rule-Based Coreference Resolution using SpaCy
+# ------------------------------------------------------------------------------
+# This script implements a rule-based approach to coreference resolution,
+# a critical task in Natural Language Processing (NLP) for identifying
+# expressions in text that refer to the same entity (persons, places, things, etc.).
+#
+# Approach Inspired By:
+# - The concepts outlined in general NLP coreference resolution literature.
+# - Utilizes SpaCy (en_core_web_md) for linguistic features:
+#   - Part-of-Speech (POS) tagging
+#   - Dependency Parsing (Syntactic Structure)
+#   - Named Entity Recognition (NER)
+#   - Morphological Analysis (Number, Gender)
+#   - Word Vectors (for semantic similarity fallback)
+#
+# Methodology (Rule-Based):
+# As described in the article "The Key to Unlocking True Language Understanding:
+# Coreference Resolution", this system relies on predefined linguistic rules
+# and heuristics based on syntactic and semantic patterns. It processes
+# potential referring expressions (mentions), primarily pronouns and proper nouns,
+# and attempts to link them to preceding potential antecedents.
+#
+# Key Rules Implemented:
+# 1. Pleonastic 'It' detection (non-referential 'it')
+# 2. Reflexive pronoun resolution (e.g., 'himself' -> subject)
+# 3. Relative pronoun resolution (e.g., 'who'/'which' -> head noun)
+# 4. Quoted speech pronoun resolution ('I'/'we' -> speaker)
+# 5. Possessive pronoun resolution ('his'/'her' -> possessor)
+# 6. Standard pronoun resolution (backward search with agreement checks)
+# 7. Proper noun matching (exact and partial matches)
+#
+# Scoring & Ambiguity Handling:
+# To address the challenge of ambiguity mentioned in the article, rules are
+# prioritized, and a confidence score is assigned based on the rule's reliability
+# and contextual factors like NER matches, subject salience, and proximity.
+# More reliable rules (e.g., Reflexive, Relative) get higher scores.
+#
+# Context Management:
+# Resolving coreferences often depends on context. This system uses a
+# configurable sentence window (`search_sentences`) to limit the search space
+# for antecedents, balancing recall with the challenge of limited context.
+#
+# Limitations (Compared to ML/Neural Approaches):
+# - Interpretability: Rule-based systems are generally more interpretable.
+# - Complexity & Variability: May struggle with the vast complexity and variability
+#   of natural language compared to models trained on large corpora.
+# - Generalization: May not generalize as well to unseen patterns.
+# - World Knowledge: Lacks deep common sense or world knowledge.
+# - Definite Noun Phrase & Clausal Coreference: Primarily focuses on pronouns
+#   and proper nouns, with limited handling of other referring expression types.
+# - Cluster Building: Outputs pairs, not fully resolved entity clusters (though
+#   pairs could be used for downstream clustering).
+#
+# Evaluation:
+# Standard metrics like MUC, B-Cubed, and CoNLL F1 are typically used to evaluate
+# coreference resolution systems, assessing performance on mentions, links, and chains.
+# ------------------------------------------------------------------------------
+
 from __future__ import annotations
+
 import gender_guesser.detector as gender
 import spacy
-from spacy.tokens import Doc, Span, Token
+from spacy.tokens import Token
 
 # --- Constants ---
 COLLECTIVE_NOUNS = {"team", "committee", "government", "group", "company", "staff", "jury", "class", "party"}
@@ -251,7 +311,15 @@ def is_reflexive(token: Token) -> bool:
     return token.tag_ == "PRP" and token.lemma_.endswith("self")
 
 
-def find_subject(token: Token):
+def find_subject(token: Token) -> Token | None:
+    """Attempt to locate the syntactic subject associated with a given token.
+
+    Traverses upward in the dependency tree until a governing verb is found,
+    then returns the subject of that verb, if any.
+
+    :param token: The token for which to find the associated subject.
+    :return: The subject token, or None if not found.
+    """
     head = token.head
     while head.pos_ not in ("VERB", "AUX") and head.dep_ != "ROOT" and head.head != head:
         head = head.head
@@ -272,65 +340,86 @@ def find_subject(token: Token):
 
 
 def find_speaker(pronoun: Token) -> Token | None:
+    """Find the likely speaker associated with a pronoun within its sentence.
+
+    It traverses up the dependency tree looking for a governing reporting verb
+    and then tries to extract the subject of that verb.
+
+    :param pronoun: The pronoun token to resolve.
+    :return: The token likely referring to the speaker, or None.
+    """
     current = pronoun
     while current.head != current and current.sent == pronoun.sent:
         governing_verb = current.head
-        if governing_verb.lemma_ in REPORTING_VERBS:
-            if current.dep_ in ("ccomp", "advcl", "xcomp") or (current.dep_ == "dobj" and current.pos_ == "PRON"):
-                speaker = find_subject(governing_verb)
-                if speaker:
-                    return speaker
-                else:
-                    return None  # Stop search
+        if governing_verb.lemma_ in REPORTING_VERBS and (
+            current.dep_ in ("ccomp", "advcl", "xcomp") or (current.dep_ == "dobj" and current.pos_ == "PRON")
+        ):
+            speaker = find_subject(governing_verb)
+            return speaker if speaker else None
+
         if current.dep_ == "nsubj" and governing_verb.dep_ == "ccomp" and governing_verb.head.lemma_ in REPORTING_VERBS:
             reporting_verb = governing_verb.head
             speaker = find_subject(reporting_verb)
-            if speaker:
-                return speaker
-            else:
-                return None
+            return speaker if speaker else None
+
         current = current.head
+
     return None
 
 
 def is_pleonastic_it(token: Token) -> bool:
+    """Return True if the token 'it' is used pleonastically (e.g., weather, time, cleft)."""
     if token.lemma_ != "it":
         return False
+
     if token.dep_ == "expl":
         return True
-    if token.dep_ == "nsubj":
-        verb = token.head
-        if verb.pos_ == "VERB":
-            if verb.lemma_ in {"rain", "snow", "hail", "thunder", "lighten", "be"}:
-                if verb.lemma_ == "be":
-                    attr = next((c for c in verb.children if c.dep_ == "attr"), None)
-                    if attr and (attr.ent_type_ == "TIME" or any(t.ent_type_ == "TIME" for t in attr.subtree)):
-                        return True
-                    if attr and any(
-                        t.text.lower() in ["o'clock", "pm", "am", "noon", "midnight", "raining", "snowing"]
-                        for t in attr.subtree
-                    ):
-                        return True
-                else:
-                    return True  # Direct weather verbs
-            if verb.lemma_ in {"seem", "appear", "happen", "matter", "turn out", "look", "sound"}:
-                if any(c.dep_ in ("ccomp", "csubj", "xcomp", "acomp", "advcl") for c in verb.children):
-                    return True
-        elif verb.lemma_ == "be" and verb.pos_ == "AUX":
+
+    if token.dep_ != "nsubj":
+        return False
+
+    verb = token.head
+
+    if verb.pos_ == "VERB":
+        is_weather_verb = verb.lemma_ in {"rain", "snow", "hail", "thunder", "lighten"}
+        if is_weather_verb:
+            return True
+
+        if verb.lemma_ == "be":
             attr = next((c for c in verb.children if c.dep_ == "attr"), None)
             if attr:
-                is_time_attr = (
-                    attr.ent_type_ == "TIME"
-                    or any(t.ent_type_ == "TIME" for t in attr.subtree)
-                    or any(t.text.lower() in ["o'clock", "pm", "am", "noon", "midnight"] for t in attr.subtree)
+                subtree = list(attr.subtree)
+                has_time_ent = attr.ent_type_ == "TIME" or any(t.ent_type_ == "TIME" for t in subtree)
+                has_time_keyword = any(
+                    t.text.lower() in {"o'clock", "pm", "am", "noon", "midnight", "raining", "snowing"} for t in subtree
                 )
-                has_almost = any(c.lemma_ == "almost" and c.dep_ == "advmod" for c in attr.children)
-                is_num_like = attr.like_num or (len(attr.text) > 0 and attr.text[0].isdigit())
-                if is_time_attr or (has_almost and is_num_like):
+                if has_time_ent or has_time_keyword:
                     return True
-                relcl = next((c for c in verb.children if c.dep_ == "relcl" and c.head == attr), None)
-                if relcl and relcl[0].tag_ in ["WP", "WDT"]:
-                    return True  # Cleft
+
+        if verb.lemma_ in {"seem", "appear", "happen", "matter", "turn out", "look", "sound"} and any(
+            c.dep_ in {"ccomp", "csubj", "xcomp", "acomp", "advcl"} for c in verb.children
+        ):
+            return True
+
+    elif verb.lemma_ == "be" and verb.pos_ == "AUX":
+        attr = next((c for c in verb.children if c.dep_ == "attr"), None)
+        if attr:
+            subtree = list(attr.subtree)
+            is_time_attr = (
+                attr.ent_type_ == "TIME"
+                or any(t.ent_type_ == "TIME" for t in subtree)
+                or any(t.text.lower() in {"o'clock", "pm", "am", "noon", "midnight"} for t in subtree)
+            )
+            has_almost = any(c.lemma_ == "almost" and c.dep_ == "advmod" for c in attr.children)
+            is_num_like = attr.like_num or (attr.text and attr.text[0].isdigit())
+
+            if is_time_attr or (has_almost and is_num_like):
+                return True
+
+            relcl = next((c for c in verb.children if c.dep_ == "relcl" and c.head == attr), None)
+            if relcl and relcl[0].tag_ in ["WP", "WDT"]:
+                return True  # Cleft
+
     return False
 
 
