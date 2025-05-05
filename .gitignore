@@ -153,3 +153,5 @@ Text_classification/model/pos_lda_model.model.state
 Text_classification/model/pos_lda_model.model.expElogbeta.npy
 Text_classification/model/lda.model.id2word
 Text_classification/model/lda.model.expElogbeta.npy
+essay_grading/model_parse_xfm_bart_base-v0_1_0/
+essay_grading/model_parse_xfm_bart_large-v0_1_0/
