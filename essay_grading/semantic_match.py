@@ -35,7 +35,7 @@ except ImportError as e:
 # Attempt to import rich
 try:
     from rich.console import Console
-        from rich.logging import RichHandler
+    from rich.logging import RichHandler
 
     _rich_available = True
 except ImportError:
@@ -80,6 +80,7 @@ class SemanticCosineSimilarity:
         model: SentenceTransformer,
         chunk_size: int = 384,
         overlap: int = 64,
+        batch_size: int = 32,
     ) -> None:
         """Initialize the SemanticCosineSimilarity calculator.
 
@@ -109,17 +110,16 @@ class SemanticCosineSimilarity:
         self.model = model
         self.chunk_size = chunk_size
         self.overlap = overlap
-        # Get model name if possible for logging (handle potential absence)
-        # Use model.config.name if available (newer SentenceTransformer versions)
+        self.batch_size = batch_size
+
         model_name = getattr(getattr(model, "config", {}), "name", None)
-        if not model_name:  # Fallback
-            # Try another common attribute name if the first doesn't work
+        if not model_name:
             model_name = getattr(model, "_model_config", {}).get("name", model.__class__.__name__)
 
-        # Use rich markup for emphasis in logs if desired
         logger.info(
             f"SemanticCosineSimilarity initialized with model: [cyan]{model_name}[/cyan], "
-            f"chunk_size: [yellow]{self.chunk_size}[/yellow], overlap: [yellow]{self.overlap}[/yellow]"
+            f"chunk_size: [yellow]{self.chunk_size}[/yellow], overlap: [yellow]{self.overlap}[/yellow], "
+            f"batch_size: [yellow]{self.batch_size}[/yellow]",
         )
 
     def _get_aggregated_embedding(self, text: str) -> Optional[torch.Tensor]:
@@ -156,10 +156,9 @@ class SemanticCosineSimilarity:
                 logger.exception(f"Failed to encode short text: '{text[:50]}...'. Error: {e}")
                 return None
 
-        # Generate potentially overlapping chunks for longer text
         step = self.chunk_size - self.overlap
         chunks = [text[i : i + self.chunk_size] for i in range(0, n, step)]
-        valid_chunks = [chunk for chunk in chunks if chunk]  # Filter empty
+        valid_chunks = [chunk for chunk in chunks if chunk]
 
         if not valid_chunks:
             logger.warning(f"Text resulted in no valid chunks after processing: '{text[:50]}...'")
@@ -170,7 +169,12 @@ class SemanticCosineSimilarity:
         try:
             # Encode chunks in batch for efficiency
             # show_progress_bar can be useful here if encoding takes time
-            chunk_embeddings = self.model.encode(valid_chunks, convert_to_tensor=True, show_progress_bar=True)
+            chunk_embeddings = self.model.encode(
+                valid_chunks,
+                batch_size=self.batch_size,
+                convert_to_tensor=True,
+                show_progress_bar=True,
+            )
 
             if not isinstance(chunk_embeddings, torch.Tensor) or chunk_embeddings.nelement() == 0:
                 logger.error(f"Model encoding returned invalid result for chunks of text: '{text[:50]}...'")
@@ -243,11 +247,10 @@ class SemanticCosineSimilarity:
             return similarity
 
         except Exception:
-            # Catch any unexpected errors during the process
             logger.exception(
                 f"Error calculating semantic similarity for texts: '{text1[:50]}...' vs '{text2[:50]}...'.",
             )
-            return None  # Return None on failure
+            return None
 
 
 # --- Example Usage ---
@@ -274,15 +277,15 @@ if __name__ == "__main__":
         # Use rich console for printing separators if desired
         try:
             console = Console()
-            separator = lambda: console.print("-" * 30, style="dim")  # Make separator slightly longer  # noqa: E731
+            separator = lambda: console.print("-" * 30, style="dim")  # Make separator slightly longer
         except ImportError:
-            separator = lambda: print("-" * 30)  # Fallback if rich isn't fully utilized for print  # noqa: E731, T201
+            separator = lambda: print("-" * 30)  # Fallback if rich isn't fully utilized for print  # noqa: T201
 
         logger.info("Starting Semantic Similarity Example [bold green](using Rich logging)[/bold green]")
     else:
         # Fallback to basic logging if rich is not available
         logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        separator = lambda: print("-" * 30)  # noqa: E731, T201
+        separator = lambda: print("-" * 30)  # noqa: T201
         logger.info("Starting Semantic Similarity Example (using standard logging)")
 
     try:
@@ -368,3 +371,4 @@ if __name__ == "__main__":
         logger.exception("An unexpected error occurred in the example:")  # Rich handler will format this
 
     logger.info("Semantic Similarity Example Finished")
+
