@@ -18,7 +18,7 @@ class EssayScores(BaseModel):
 
     """
 
-    semantic_score: float | None
+    semantic_score: float | None = 0.0
 
 
 class Essay(BaseModel):

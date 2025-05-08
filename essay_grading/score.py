@@ -24,6 +24,11 @@ def score_essay(essay: str, reference: str) -> EssayScores:
     )
 
     # Calculate the semantic similarity score
-    semantic_score = sentence_semantic_model.calculate_similarity(essay, reference)
-
-    return EssayScores(semantic_score=semantic_score)
+    semantic_score = sentence_semantic_model.calculate_similarity(
+        essay,
+        reference,
+        metrics_to_calculate=["cosine"],
+    )
+    if semantic_score is not None:
+        return EssayScores(semantic_score=semantic_score.cosine)
+    return EssayScores()

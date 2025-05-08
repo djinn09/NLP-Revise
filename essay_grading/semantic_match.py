@@ -74,9 +74,9 @@ GOOD_SIMILARITY_SCORE = float(os.getenv("GOOD_SIMILARITY_SCORE", "0.7"))
 BAD_SIMILARITY_SCORE = float(os.getenv("BAD_SIMILARITY_SCORE", "0.3"))
 
 # --- Metric Definitions ---
-METRIC_COSINE = "cosine_similarity"
-METRIC_EUCLIDEAN = "euclidean_distance"
-METRIC_MANHATTAN = "manhattan_distance"
+METRIC_COSINE = "cosine"
+METRIC_EUCLIDEAN = "euclidean"
+METRIC_MANHATTAN = "manhattan"
 
 ALLOWED_METRICS_MAP: Dict[str, str] = {
     "cosine": METRIC_COSINE,
@@ -95,9 +95,9 @@ class SimilarityScores(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")  # Enable init by alias, ignore extra fields
 
-    cosine_similarity: Optional[float] = Field(default=None, alias=METRIC_COSINE)
-    euclidean_distance: Optional[float] = Field(default=None, alias=METRIC_EUCLIDEAN)
-    manhattan_distance: Optional[float] = Field(default=None, alias=METRIC_MANHATTAN)
+    cosine: Optional[float] = Field(default=None, alias=METRIC_COSINE)
+    euclidean: Optional[float] = Field(default=None, alias=METRIC_EUCLIDEAN)
+    manhattan: Optional[float] = Field(default=None, alias=METRIC_MANHATTAN)
 
 
 class SemanticCosineSimilarity:
@@ -367,7 +367,10 @@ class SemanticCosineSimilarity:
         return SimilarityScores(**scores_data)
 
     def calculate_similarity(
-        self, text1: str, text2: str, metrics_to_calculate: Optional[List[str]] = None
+        self,
+        text1: str,
+        text2: str,
+        metrics_to_calculate: Optional[List[str]] = None,
     ) -> Optional[SimilarityScores]:
         """Calculate specified similarity/distance metrics between two texts.
 
