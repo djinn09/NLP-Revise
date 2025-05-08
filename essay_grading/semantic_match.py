@@ -19,6 +19,7 @@ Key Features:
     - Manhattan Distance
 - Selectable metrics: users can choose which ones to compute.
 - Integration with SentenceTransformer models.
+- Structured output using Pydantic models.
 - Optional rich logging for better visual feedback.
 """
 
@@ -26,12 +27,14 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, List, Optional, Set, Tuple  # Necessary type hints
+from typing import Dict, List, Optional, Set, Tuple
+
+from pydantic import BaseModel, ConfigDict, Field
 
 # Attempt to import necessary libraries and provide guidance if they are missing
 try:
     import torch
-    import torch.nn.functional as F  # noqa: N812 - Keep F as standard PyTorch alias for cosine_similarity
+    import torch.nn.functional as F  # noqa: N812 - Keep F as standard PyTorch alias
     from sentence_transformers import SentenceTransformer
 except ImportError as e:
     # Determine which library is missing for a more specific error message
@@ -46,8 +49,8 @@ except ImportError as e:
     error_message = f"Missing {missing_lib}. Please install it (e.g., `pip install {missing_lib}`). Original error: {e}"
     raise ImportError(error_message) from e
 
+
 # Attempt to import 'rich' for enhanced console logging.
-# This is an optional dependency for the example usage, but made mandatory here for demonstration.
 try:
     from rich.console import Console
     from rich.logging import RichHandler
@@ -55,8 +58,8 @@ try:
     _rich_available = True  # Flag to indicate rich is available
 except ImportError:
     _rich_available = False  # Flag to indicate rich is not available
-    # Raise an error if rich is considered critical for the application's logging.
-    # For this module, we are assuming the user wants the rich logging if they run the example.
+    # For this module, rich is considered highly beneficial for the example's output.
+    # If the library part needs to function without rich, this error might be conditional.
     error_message = "Missing rich. Please install it (`pip install rich`) for enhanced logging in the example."
     raise ImportError(error_message) from None  # 'from None' suppresses the original ImportError context
 
@@ -67,26 +70,34 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)  # Module-specific logger
 
 # --- Configuration for Similarity Score Interpretation (used in example) ---
-# Thresholds for categorizing cosine similarity scores.
-# These can be set via environment variables or default to predefined values.
 GOOD_SIMILARITY_SCORE = float(os.getenv("GOOD_SIMILARITY_SCORE", "0.7"))
 BAD_SIMILARITY_SCORE = float(os.getenv("BAD_SIMILARITY_SCORE", "0.3"))
 
 # --- Metric Definitions ---
-# Define internal keys for metrics to ensure consistency.
 METRIC_COSINE = "cosine_similarity"
 METRIC_EUCLIDEAN = "euclidean_distance"
 METRIC_MANHATTAN = "manhattan_distance"
 
-# Map user-friendly metric names (lowercase) to internal keys.
-# This allows users to request metrics with simple names.
 ALLOWED_METRICS_MAP: Dict[str, str] = {
     "cosine": METRIC_COSINE,
     "euclidean": METRIC_EUCLIDEAN,
     "manhattan": METRIC_MANHATTAN,
 }
-# A set of all valid internal metric keys for quick lookup.
 ALL_METRIC_KEYS: Set[str] = set(ALLOWED_METRICS_MAP.values())
+
+
+# --- Pydantic Model for Similarity Scores ---
+class SimilarityScores(BaseModel):
+    """Data model for storing calculated similarity scores.
+
+    Allows initialization using internal metric keys (aliases) and access via Pythonic attribute names.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")  # Enable init by alias, ignore extra fields
+
+    cosine_similarity: Optional[float] = Field(default=None, alias=METRIC_COSINE)
+    euclidean_distance: Optional[float] = Field(default=None, alias=METRIC_EUCLIDEAN)
+    manhattan_distance: Optional[float] = Field(default=None, alias=METRIC_MANHATTAN)
 
 
 class SemanticCosineSimilarity:
@@ -94,10 +105,10 @@ class SemanticCosineSimilarity:
 
     This class encapsulates the logic for:
     1. Initializing with a Sentence Transformer model and chunking parameters.
-    2. Processing input texts, potentially splitting them into overlapping chunks if they exceed a defined size.
-    3. Generating embeddings for these texts (or their chunks) using the provided model.
-    4. Aggregating chunk embeddings (if any) into a single representative embedding for each text.
-    5. Computing specified similarity/distance metrics between the final text embeddings.
+    2. Processing input texts, potentially splitting them into overlapping chunks.
+    3. Generating embeddings for texts (or their chunks).
+    4. Aggregating chunk embeddings into a single representative embedding.
+    5. Computing specified similarity/distance metrics, returning a structured object.
 
     The use of overlapping chunks aims to preserve semantic context that might be lost
     at chunk boundaries if simple, non-overlapping splitting were used.
@@ -163,17 +174,15 @@ class SemanticCosineSimilarity:
         self.batch_size = batch_size
 
         # Attempt to get the model's name for logging purposes
-        model_name = getattr(getattr(model, "config", {}), "name", None)  # Try HuggingFace config
-        if not model_name:  # Fallback strategies
-            model_name_from_st_config = getattr(model, "_model_config", {}).get(
-                "name",
-            )  # Sentence Transformers internal config
+        model_name = getattr(getattr(model, "config", {}), "name", None)
+        if not model_name:
+            model_name_from_st_config = getattr(model, "_model_config", {}).get("name")
             if model_name_from_st_config:
                 model_name = model_name_from_st_config
-            elif hasattr(model, "name_or_path"):  # Common attribute for HF models
+            elif hasattr(model, "name_or_path"):
                 model_name = model.name_or_path
             else:
-                model_name = model.__class__.__name__  # Class name as last resort
+                model_name = model.__class__.__name__
 
         logger.info(
             f"SemanticCosineSimilarity initialized with model: [cyan]{model_name}[/cyan], "
@@ -197,10 +206,9 @@ class SemanticCosineSimilarity:
             or `None` if the input text is empty, not a string, or if encoding fails.
 
         """
-        # Validate input text
         if not isinstance(text, str) or not text.strip():
             logger.warning("Input text is empty or not a string. Cannot generate embedding.")
-            return None  # Early exit for invalid input
+            return None
 
         text_stripped = text.strip()  # Remove leading/trailing whitespace
         n = len(text_stripped)
@@ -209,22 +217,24 @@ class SemanticCosineSimilarity:
         try:
             # Case 1: Text is short enough to be encoded directly
             if n <= self.chunk_size:
-                logger.debug(f"Text length ({n}) <= chunk_size ({self.chunk_size}), encoding directly.")
                 # Encode the text; `convert_to_tensor=True` ensures a PyTorch tensor is returned.
                 embedding: torch.Tensor = self.model.encode(
-                    text_stripped, convert_to_tensor=True, show_progress_bar=False
+                    text_stripped,
+                    convert_to_tensor=True,
+                    show_progress_bar=False,
                 )
                 # Squeeze to ensure it's a 1D tensor (D,) even if model returns (1,D) for single sentences
                 aggregated_embedding = embedding.squeeze()
             # Case 2: Text is long and needs chunking
             else:
                 # Calculate the step size for chunking, considering the overlap
+
                 step = self.chunk_size - self.overlap
                 # Create chunks. Filter out any potential empty strings if text length is not a multiple of step.
                 chunks = [
                     text_stripped[i : i + self.chunk_size]
                     for i in range(0, n, step)
-                    if text_stripped[i : i + self.chunk_size]  # Ensure chunk is not empty
+                    if text_stripped[i : i + self.chunk_size]
                 ]
                 # Further filter to remove chunks that are only whitespace
                 valid_chunks = [chunk for chunk in chunks if chunk.strip()]
@@ -234,7 +244,7 @@ class SemanticCosineSimilarity:
                         f"Text resulted in no valid (non-empty, non-whitespace) "
                         f"chunks after processing: '{text_stripped[:50]}...'"
                     )
-                    # aggregated_embedding remains None
+                # aggregated_embedding remains None
                 else:
                     logger.debug(
                         f"Encoding [magenta]{len(valid_chunks)}[/magenta] chunks for text: '{text_stripped[:50]}...'"
@@ -243,13 +253,13 @@ class SemanticCosineSimilarity:
                     chunk_embeddings: torch.Tensor = self.model.encode(
                         valid_chunks,
                         batch_size=self.batch_size,
-                        convert_to_tensor=True,
+                        convert_to_tensor=True,  # Check if encoding produced a valid, non-empty tensor
                         # Show progress bar only if there are more chunks than one batch
                         show_progress_bar=len(valid_chunks) > self.batch_size,
                     )
 
                     # Check if encoding produced a valid, non-empty tensor
-                    if chunk_embeddings.nelement() == 0:  # `nelement()` is num_elements
+                    if chunk_embeddings.nelement() == 0:
                         logger.error(
                             f"Model encoding returned empty tensor for chunks of text: '{text_stripped[:50]}...'"
                         )
@@ -267,16 +277,15 @@ class SemanticCosineSimilarity:
             # A 0-dim tensor (scalar) might occur if model.encode returns a scalar for very short/empty strings
             # when squeeze() is applied, though unlikely with sentence transformers.
             if aggregated_embedding is not None and aggregated_embedding.dim() == 0:
-                aggregated_embedding = aggregated_embedding.unsqueeze(0)  # Convert scalar to 1D tensor
-
-        except Exception as e:  # Catch any unexpected errors during encoding or aggregation
+                aggregated_embedding = aggregated_embedding.unsqueeze(0)
+        except Exception as e:
             logger.exception(f"Failed to encode or aggregate text: '{text_stripped[:50]}...'. Error: {e}")
-            aggregated_embedding = None  # Ensure None is returned on failure
-
+            aggregated_embedding = None
         return aggregated_embedding
 
     def _resolve_requested_metrics(self, metrics_to_calculate: Optional[List[str]]) -> Set[str]:
-        """Processe the user's list of requested metrics into a set of valid internal metric keys.
+        """Process the user's list of requested metrics into a set of valid internal metric keys.
+
         Defaults to cosine similarity if `metrics_to_calculate` is None.
         """
         requested_metrics_internal: Set[str] = set()
@@ -298,10 +307,11 @@ class SemanticCosineSimilarity:
         self,
         text1: str,
         text2: str,
+        *,
         is_text1_empty: bool,
         is_text2_empty: bool,
         requested_metrics: Set[str],
-    ) -> Tuple[bool, Optional[Dict[str, float]]]:
+    ) -> Tuple[bool, Optional[SimilarityScores]]:
         """Check for conditions allowing an early exit without embedding generation.
 
         Returns:
@@ -309,28 +319,28 @@ class SemanticCosineSimilarity:
             If proceed_to_embeddings is False, 'result' contains the final scores or None.
 
         """
-        scores: Dict[str, float] = {}
+        scores_data: Dict[str, float] = {}  # Uses internal keys (aliases for SimilarityScores)
         # Case 1: Texts are identical OR both are effectively empty
         if text1 == text2 or (is_text1_empty and is_text2_empty):
             log_msg = "Texts are identical" if text1 == text2 else "Both texts are effectively empty"
             logger.info(f"{log_msg}. Returning perfect scores for requested metrics.")
             if METRIC_COSINE in requested_metrics:
-                scores[METRIC_COSINE] = 1.0
+                scores_data[METRIC_COSINE] = 1.0
             if METRIC_EUCLIDEAN in requested_metrics:
-                scores[METRIC_EUCLIDEAN] = 0.0
+                scores_data[METRIC_EUCLIDEAN] = 0.0
             if METRIC_MANHATTAN in requested_metrics:
-                scores[METRIC_MANHATTAN] = 0.0
-            return False, scores  # Don't proceed, result is 'scores'
+                scores_data[METRIC_MANHATTAN] = 0.0
+            return False, SimilarityScores(**scores_data)
 
         # Case 2: One text is effectively empty, and the other is not
         if is_text1_empty != is_text2_empty:
             logger.warning("One input text is effectively empty while the other is not. Cannot compare.")
-            return False, None  # Don't proceed, result is None (failure)
+            return False, None
 
         # Case 3: No valid metrics were requested
         if not requested_metrics:
-            logger.info("No valid metrics requested. Returning empty scores dict.")
-            return False, {}  # Don't proceed, result is an empty dict
+            logger.info("No valid metrics requested. Returning empty scores object.")
+            return False, SimilarityScores()  # All fields will be None
 
         return True, None  # Proceed to embedding generation
 
@@ -339,52 +349,41 @@ class SemanticCosineSimilarity:
         emb1: torch.Tensor,
         emb2: torch.Tensor,
         requested_metrics: Set[str],
-    ) -> Dict[str, float]:
-        """Calculate the specified metrics given two 1D embeddings."""
-        scores: Dict[str, float] = {}
-        # Reshape embeddings from (D,) to (1, D) for PyTorch functions
+    ) -> SimilarityScores:
+        """Calculate specified metrics given two 1D embeddings, returns a SimilarityScores object."""
+        scores_data: Dict[str, float] = {}  # Uses internal keys (aliases for SimilarityScores)
         emb1_reshaped = emb1.unsqueeze(0)
         emb2_reshaped = emb2.unsqueeze(0)
 
         if METRIC_COSINE in requested_metrics:
             cosine_sim = F.cosine_similarity(emb1_reshaped, emb2_reshaped).item()
-            scores[METRIC_COSINE] = max(-1.0, min(1.0, cosine_sim))
+            scores_data[METRIC_COSINE] = max(-1.0, min(1.0, cosine_sim))
         if METRIC_EUCLIDEAN in requested_metrics:
-            scores[METRIC_EUCLIDEAN] = torch.cdist(emb1_reshaped, emb2_reshaped, p=2.0).item()
+            scores_data[METRIC_EUCLIDEAN] = torch.cdist(emb1_reshaped, emb2_reshaped, p=2.0).item()
         if METRIC_MANHATTAN in requested_metrics:
-            scores[METRIC_MANHATTAN] = torch.cdist(emb1_reshaped, emb2_reshaped, p=1.0).item()
+            scores_data[METRIC_MANHATTAN] = torch.cdist(emb1_reshaped, emb2_reshaped, p=1.0).item()
 
-        logger.debug(f"Calculated scores from embeddings: {scores}")
-        return scores
+        logger.debug(f"Calculated scores from embeddings (raw data for Pydantic): {scores_data}")
+        return SimilarityScores(**scores_data)
 
     def calculate_similarity(
         self, text1: str, text2: str, metrics_to_calculate: Optional[List[str]] = None
-    ) -> Optional[Dict[str, float]]:
-        """Calculate specified semantic similarity/distance metrics between two texts.
-
-        This method first generates aggregated embeddings for both input texts.
-        Then, based on the `metrics_to_calculate` parameter, it computes
-        the requested metrics.
+    ) -> Optional[SimilarityScores]:
+        """Calculate specified similarity/distance metrics between two texts.
 
         Args:
             text1: The first text string.
             text2: The second text string.
             metrics_to_calculate: A list of metric names (strings) to calculate.
-                Valid names are "cosine", "euclidean", "manhattan" (case-insensitive).
+                Valid: "cosine", "euclidean", "manhattan" (case-insensitive).
                 If `None` (default), only "cosine" similarity is calculated.
-                If an empty list `[]` is provided, or if all provided names are invalid,
-                an empty dictionary is returned (assuming embeddings can be generated).
+                If an empty list `[]` or all invalid, an empty SimilarityScores object
+                (all fields None) is returned (assuming no other failures).
 
         Returns:
-            A dictionary where keys are the internal metric names (e.g.,
-            "cosine_similarity", "euclidean_distance") and values are the
-            calculated scores (float).
-            Returns `None` if:
-                - Embeddings cannot be generated for one or both texts.
-                - One text is effectively empty while the other is not.
-                - An unexpected error occurs during calculation.
-            Returns a dictionary with perfect scores (e.g., cosine=1.0, distance=0.0)
-            for requested metrics if texts are identical or both effectively empty.
+            An Optional `SimilarityScores` object containing the calculated metrics.
+            Returns `None` if embeddings fail, one text is empty and other isn't,
+            or an unexpected error occurs.
 
         """
         requested_metrics = self._resolve_requested_metrics(metrics_to_calculate)
@@ -395,13 +394,13 @@ class SemanticCosineSimilarity:
         proceed_to_embeddings, early_result = self._handle_early_exit_cases(
             text1,
             text2,
-            is_text1_empty,
-            is_text2_empty,
-            requested_metrics,
+            is_text1_empty=is_text1_empty,
+            is_text2_empty=is_text2_empty,
+            requested_metrics=requested_metrics,
         )
 
         if not proceed_to_embeddings:
-            return early_result  # This handles identical, one-empty, or no-metrics cases
+            return early_result  # Handles identical, one-empty, or no-metrics cases
 
         # If we reach here, we need to generate embeddings and calculate metrics
         try:
@@ -411,14 +410,12 @@ class SemanticCosineSimilarity:
             emb2 = self._get_aggregated_embedding(text2)
 
             if emb1 is None or emb2 is None:
-                logger.error("Could not generate embeddings for one or both texts. Cannot calculate similarity.")
-                return None  # Embedding generation failed
+                logger.error("Could not generate embeddings for one or both texts.")
+                return None
 
             if emb1.dim() != 1 or emb2.dim() != 1:
-                logger.error(
-                    f"Embeddings have unexpected dimensions: emb1={emb1.shape}, emb2={emb2.shape}. Cannot calculate."
-                )
-                return None  # Embeddings have wrong shape
+                logger.error(f"Embeddings have unexpected dimensions: emb1={emb1.shape}, emb2={emb2.shape}.")
+                return None
 
             # All checks passed, calculate metrics using the embeddings
             return self._calculate_metrics_for_embeddings(emb1, emb2, requested_metrics)
@@ -433,44 +430,40 @@ class SemanticCosineSimilarity:
 
 # --- Example Usage ---
 if __name__ == "__main__":
-    # This block executes only when the script is run directly (not imported as a module).
-    print("Running Semantic Similarity Example...")  # noqa: T201 Basic print for initial feedback
+    # This block executes only when the script is run directly.
+    print("Running Semantic Similarity Example...")  # noqa: T201
 
     # --- Configure Rich Logging for the Example ---
-    # Clear any existing handlers from the root logger to prevent duplicate output
-    logging.root.handlers.clear()
-    # Set logging level from environment variable or default to INFO
+    logging.root.handlers.clear()  # Remove default handlers
     LOG_LEVEL_STR = os.getenv("LOG_LEVEL", "INFO").upper()
-    LOG_LEVEL = getattr(logging, LOG_LEVEL_STR, logging.INFO)  # Fallback to INFO if invalid
+    LOG_LEVEL = getattr(logging, LOG_LEVEL_STR, logging.INFO)  # Default to INFO
     logging.root.setLevel(LOG_LEVEL)
 
-    console: Optional[Console] = None  # Initialize console for optional rich printing
+    console: Optional[Console] = None
     if _rich_available:
-        # If 'rich' is available, set up RichHandler for formatted console logging
         rich_handler = RichHandler(
             level=LOG_LEVEL,
-            show_path=False,  # Don't show file path in log messages
-            rich_tracebacks=True,  # Enable rich-formatted tracebacks
-            markup=True,  # Allow rich markup (e.g., [bold]) in log messages
-            console=Console(stderr=True),  # Direct logs to stderr to separate from potential stdout prints
+            show_path=False,
+            rich_tracebacks=True,
+            markup=True,
+            console=Console(stderr=True),  # Logs to stderr
         )
         logging.root.addHandler(rich_handler)
-        console = Console()  # Create a console instance for printing separators
-        # Define a separator function using rich console
-        separator = lambda: console.print("-" * 50, style="dim") if console else print("-" * 50)  # noqa: T201
+        console = Console()  # For printing separators
+        separator = lambda: console.print("-" * 60, style="dim") if console else print("-" * 60)  # noqa: T201
         logger.info("Starting Semantic Similarity Example [bold green](using Rich logging)[/bold green]")
     else:
-        # Fallback to basic logging configuration if 'rich' is not available
+        # Fallback to basic logging
         logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        separator = lambda: print("-" * 50)  # noqa: T201 Basic separator
+        separator = lambda: print("-" * 60)  # noqa: T201
         logger.info("Starting Semantic Similarity Example (using standard logging)")
 
     try:
         # --- Configuration for the Example ---
-        MODEL_NAME = os.environ.get("MODEL_NAME", "all-MiniLM-L6-v2")  # Model to use
-        CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "384"))  # Chunk size for long texts
-        OVERLAP = int(os.environ.get("OVERLAP", "64"))  # Overlap between chunks
-        BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "32"))  # Batch size for encoding
+        MODEL_NAME = os.environ.get("MODEL_NAME", "all-MiniLM-L6-v2")
+        CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "384"))
+        OVERLAP = int(os.environ.get("OVERLAP", "64"))
+        BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "32"))
 
         # --- Initialize Model ---
         logger.info(f"Loading Sentence Transformer model: [cyan]{MODEL_NAME}[/cyan]...")
@@ -490,26 +483,16 @@ if __name__ == "__main__":
             model=model, chunk_size=CHUNK_SIZE, overlap=OVERLAP, batch_size=BATCH_SIZE
         )
 
-        # --- Example Texts for Demonstration ---
-        text_a = (
-            "The quick brown fox jumps over the lazy dog. This sentence is used "
-            "to demonstrate the presence of all letters in the English alphabet. "
-            "Sentence Transformers can capture the semantic meaning of such text."
-        )
-        text_b = (
-            "Sentence embedding models like those in the Sentence Transformers "
-            "library understand the meaning behind sentences. A pangram, like the "
-            "one about the fox and dog, contains every letter."
-        )  # Semantically similar to text_a
-        text_c = (
-            "The weather today is sunny and warm, perfect for a walk in the park. "
-            "Many people are enjoying the outdoors."
-        )  # Semantically different
+        # --- Example Texts ---
+        text_a = "The quick brown fox jumps over the lazy dog."
+        text_b = "A fast, dark-colored fox leaps above a sleepy canine."
+        text_c = "The weather is pleasant today, ideal for outdoor activities."
         text_empty = ""
         text_whitespace = "   "  # Effectively empty
 
         # --- Define Test Cases ---
         # Each case specifies a description, two texts, and which metrics to calculate.
+
         test_cases = [
             {"desc": "Similar Texts (Default - Cosine only)", "t1": text_a, "t2": text_b, "metrics": None},
             {
@@ -559,25 +542,29 @@ if __name__ == "__main__":
             {"desc": "Empty Metrics List (No calculation)", "t1": text_a, "t2": text_b, "metrics": []},
         ]
 
-        # --- Run Test Cases and Log Results ---
+        # --- Run Test Cases ---
         for case in test_cases:
             logger.info(f"Calculating for: [bold yellow]{case['desc']}[/bold yellow]")
-            # Call the main calculation method
-            scores_dict = semantic_calculator.calculate_similarity(
+            # scores_obj is now Optional[SimilarityScores]
+            scores_obj: Optional[SimilarityScores] = semantic_calculator.calculate_similarity(
                 case["t1"], case["t2"], metrics_to_calculate=case["metrics"]
             )
 
-            if scores_dict is not None:  # `None` indicates a failure to get embeddings or one-empty-one-not scenario
-                if not scores_dict:  # Empty dictionary means no metrics were calculated (e.g., metrics=[])
+            if scores_obj is not None:
+                # Use model_dump to get a dictionary of calculated scores.
+                # by_alias=True gives keys like METRIC_COSINE (e.g., "cosine_similarity").
+                # exclude_none=True removes metrics that were not calculated (are None).
+                calculated_scores_dict = scores_obj.model_dump(by_alias=True, exclude_none=True)
+
+                if not calculated_scores_dict:  # True if SimilarityScores() was returned and all fields are None
                     logger.info(f"Result - {case['desc']}: No metrics calculated or returned an empty set.")
-                # Format and log the calculated scores
-                elif _rich_available:  # Use rich formatting if available
+                elif _rich_available:
                     output_parts = []
-                    for metric_key, value in scores_dict.items():
-                        metric_name_formatted = metric_key.replace("_", " ").title()
-                        color = "default"  # Default color
-                        # Apply specific coloring rules for different metrics
-                        if metric_key == METRIC_COSINE:
+                    # Iterate through the dumped dictionary
+                    for metric_key_alias, value in calculated_scores_dict.items():
+                        metric_name_formatted = metric_key_alias.replace("_", " ").title()
+                        color = "default"
+                        if metric_key_alias == METRIC_COSINE:
                             color = (
                                 "green"
                                 if value > GOOD_SIMILARITY_SCORE
@@ -585,8 +572,7 @@ if __name__ == "__main__":
                                 if value > BAD_SIMILARITY_SCORE
                                 else "red"
                             )
-                        elif "distance" in metric_key:  # Lower is better for distances
-                            # Example coloring for distances (adjust thresholds as needed)
+                        elif "distance" in metric_key_alias:
                             if value < 0.5:
                                 color = "green"
                             elif value < 1.0:
@@ -595,22 +581,19 @@ if __name__ == "__main__":
                                 color = "red"
                         output_parts.append(f"{metric_name_formatted}=[{color}]{value:.4f}[/{color}]")
                     logger.info("Result - %s: %s", case["desc"], " | ".join(output_parts))
-                else:  # Standard logging format if rich is not available
+                else:  # Standard logging
                     log_parts = [f"Result - {case['desc']}:"]
-                    for metric_key, value in scores_dict.items():
-                        metric_name_formatted = metric_key.replace("_", " ").title()
+                    for metric_key_alias, value in calculated_scores_dict.items():
+                        metric_name_formatted = metric_key_alias.replace("_", " ").title()
                         log_parts.append(f"{metric_name_formatted}={value:.4f}")
                     logger.info(" | ".join(log_parts))
-            else:  # scores_dict is None
+            else:  # scores_obj is None
                 logger.warning(f"Result - {case['desc']}: Calculation Failed or Not Applicable (returned None)")
-            separator()  # Print a separator between test cases
+            separator()
 
     except ImportError as e:
-        # Catch ImportErrors that might have been raised if a critical library was missing
-        # (though initial checks should catch these, this is a fallback).
         logger.exception(f"Example cannot run due to missing libraries: {e}")
     except ValueError as e:
-        # Catch ValueErrors, e.g., from invalid configuration for chunk_size/overlap.
         logger.exception(f"Configuration error in example: {e}")
     except Exception:
         # Catch any other unexpected errors during the example execution.
