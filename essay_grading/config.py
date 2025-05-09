@@ -187,7 +187,7 @@ def get_settings() -> Settings:
             print(
                 f"Warning: YAML file specifies 'env: {init_data['env']}', "
                 f"which differs from the loading environment '{effective_env}'. "
-                f"The YAML value will be used for settings.env."
+                f"The YAML value will be used for settings.env.",
             )
 
         settings = Settings(**init_data)
@@ -199,7 +199,7 @@ def get_settings() -> Settings:
             print(
                 f"Warning: Final settings.env ('{settings.env}') differs from the "
                 f"loading environment ('{effective_env}'). This might happen if environment "
-                f"variables (ENV, not from {effective_env}.env if override=False) set 'ENV' differently."
+                f"variables (ENV, not from {effective_env}.env if override=False) set 'ENV' differently.",
             )
         elif (
             settings.env != effective_env

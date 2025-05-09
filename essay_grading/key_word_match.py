@@ -1,3 +1,10 @@
+"""Module provides utilities and classes for text similarity calculations.
+
+It includes implementations for various similarity metrics, text preprocessing
+functions, and configurations for TF-IDF and BLEU scoring. The module also
+supports parallel processing for multiple text pair comparisons.
+"""
+
 # Use annotations for cleaner type hinting (requires Python 3.7+)
 from __future__ import annotations
 
@@ -9,10 +16,22 @@ import string
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import lru_cache
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
+# Similarity library components
+from similarity.cosine import Cosine
+from similarity.jaccard import Jaccard
+from similarity.jarowinkler import JaroWinkler
+from similarity.metric_lcs import MetricLCS
+from similarity.normalized_levenshtein import NormalizedLevenshtein
+from similarity.qgram import QGram
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable, Sequence
 # --- Pydantic Import ---
 from pydantic import BaseModel, Field, field_validator
+
+from app_types import SimilarityCalculatorConfig, SimilarityMetrics, TfidfConfig
 
 # Attempt NLTK imports
 try:
@@ -48,13 +67,18 @@ except ImportError:
     _bm25_available = False
     warnings.warn("rank_bm25 library not found. BM25 metric will be unavailable.", ImportWarning, stacklevel=2)
 
-# Similarity library components
-from similarity.cosine import Cosine
-from similarity.jaccard import Jaccard
-from similarity.jarowinkler import JaroWinkler
-from similarity.metric_lcs import MetricLCS
-from similarity.normalized_levenshtein import NormalizedLevenshtein
-from similarity.qgram import QGram
+
+# --- Similarity Metric Instances (Globally Initialized for Reuse) ---
+# These are generally stateless or thread-safe, allowing global instantiation.
+NORMALIZED_LEVENSHTEIN = NormalizedLevenshtein()
+JARO_WINKLER = JaroWinkler()
+METRIC_LCS = MetricLCS()
+QGRAM_2 = QGram(2)  # For 2-gram distance
+QGRAM_3 = QGram(3)  # For 3-gram distance
+QGRAM_4 = QGram(4)  # For 4-gram distance
+SIM_COSINE_CHAR = Cosine(2)  # Cosine similarity on character 2-grams
+SIM_JACCARD_CHAR = Jaccard(2)  # Jaccard similarity on character 2-grams
+
 
 # --- NLTK Data Handling ---
 _NLTK_RESOURCES = {
@@ -114,7 +138,7 @@ def _ensure_nltk_data(resource_name: str, download_dir: Optional[str] = None) ->
 
 # --- Preprocessing Setup ---
 @lru_cache(maxsize=1)  # Cache the result as stopwords list doesn't change often
-def get_default_stopwords() -> Set[str]:
+def get_default_stopwords() -> set[str]:
     """Lazily loads and returns the default set of English stopwords from NLTK.
 
     Ensures the 'stopwords' resource is downloaded if necessary.
@@ -171,7 +195,7 @@ def preprocess_text_base(text: str) -> str:
 
 
 @lru_cache(maxsize=1024)  # Cache tokenization results
-def tokenize_text(text: str) -> Tuple[str, ...]:
+def tokenize_text(text: str) -> tuple[str, ...]:
     """Tokenize text using NLTK's word_tokenize after basic preprocessing.
 
     Ensures 'punkt' NLTK resource is available. Falls back to simple split on error.
@@ -200,7 +224,7 @@ def tokenize_text(text: str) -> Tuple[str, ...]:
 
 
 @lru_cache(maxsize=1024)  # Cache lemmatization results
-def lemmatize_tokens(tokens: Tuple[str, ...]) -> Tuple[str, ...]:
+def lemmatize_tokens(tokens: tuple[str, ...]) -> tuple[str, ...]:
     """Lemmatize a tuple of tokens using the default WordNetLemmatizer.
 
     Returns original tokens if lemmatization fails (e.g., missing NLTK data).
@@ -222,7 +246,7 @@ def lemmatize_tokens(tokens: Tuple[str, ...]) -> Tuple[str, ...]:
 
 
 @lru_cache(maxsize=1024)  # Cache stemming results
-def stem_tokens(tokens: Tuple[str, ...]) -> Tuple[str, ...]:
+def stem_tokens(tokens: tuple[str, ...]) -> tuple[str, ...]:
     """Stems a tuple of tokens using the default PorterStemmer.
 
     Args:
@@ -237,7 +261,7 @@ def stem_tokens(tokens: Tuple[str, ...]) -> Tuple[str, ...]:
 
 
 @lru_cache(maxsize=1024)  # Cache stopword filtering results
-def filter_stopwords(tokens: Tuple[str, ...], stop_words: Optional[frozenset[str]] = None) -> Tuple[str, ...]:
+def filter_stopwords(tokens: tuple[str, ...], stop_words: Optional[frozenset[str]] = None) -> tuple[str, ...]:
     """Filter stopwords from a tuple of tokens. Also filters out non-alphanumeric tokens.
 
     Args:
@@ -254,54 +278,27 @@ def filter_stopwords(tokens: Tuple[str, ...], stop_words: Optional[frozenset[str
     return tuple(token for token in tokens if token not in sw and token.isalnum())
 
 
-# --- Similarity Metric Instances (Globally Initialized for Reuse) ---
-# These are generally stateless or thread-safe, allowing global instantiation.
-NORMALIZED_LEVENSHTEIN = NormalizedLevenshtein()
-JARO_WINKLER = JaroWinkler()
-METRIC_LCS = MetricLCS()
-QGRAM_2 = QGram(2)  # For 2-gram distance
-QGRAM_3 = QGram(3)  # For 3-gram distance
-QGRAM_4 = QGram(4)  # For 4-gram distance
-SIM_COSINE_CHAR = Cosine(2)  # Cosine similarity on character 2-grams
-SIM_JACCARD_CHAR = Jaccard(2)  # Jaccard similarity on character 2-grams
-
-
 # --- Pydantic Models for Configuration and Results ---
-
-
-class TfidfConfig(BaseModel):
-    """Configuration for the scikit-learn TfidfVectorizer.
-
-    Defines parameters like token pattern, n-gram range, and document frequency thresholds.
-    """
-
-    token_pattern: str = r"(?u)\b\w\w+\b"  # Default pattern to extract words of 2+ chars  # noqa: S105
-    ngram_range: Tuple[int, int] = Field(
-        default=(1, 1),
-        description="Range of n-grams, e.g., (1, 2) for unigrams and bigrams.",
-    )
-    max_df: float = Field(
-        default=1.0,
-        ge=0.0,
-        le=1.0,
-        description="Ignore terms with document frequency higher than this threshold.",
-    )
-    min_df: int = Field(default=1, ge=0, description="Ignore terms with document frequency lower than this threshold.")
 
 
 class BleuResult(BaseModel):
     """Data model for storing BLEU (Bilingual Evaluation Understudy) scoring results."""
 
-    score: float = Field(..., ge=0.0, le=1.0, description="Overall BLEU score, typically BLEU-N (e.g., BLEU-4).")
-    cumulative_ngram_scores: Optional[Dict[int, float]] = Field(
+    score: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Overall BLEU score, typically BLEU-N (e.g., BLEU-4).",
+    )
+    cumulative_ngram_scores: Optional[dict[int, float]] = Field(
         default=None,
         description="Cumulative BLEU scores for n-grams up to max_n.",
     )
 
     @field_validator("cumulative_ngram_scores")
     @classmethod
-    def check_ngram_scores(cls, v: Optional[Dict[int, float]]) -> Optional[Dict[int, float]]:
-        """Validates that all cumulative n-gram scores are within the [0.0, 1.0] range."""
+    def check_ngram_scores(cls, v: Optional[dict[int, float]]) -> Optional[dict[int, float]]:
+        """Validate that all cumulative n-gram scores are within the [0.0, 1.0] range."""
         if v is not None:
             for score_val in v.values():
                 if not (0.0 <= score_val <= 1.0):
@@ -310,120 +307,10 @@ class BleuResult(BaseModel):
         return v
 
 
-class SimilarityMetrics(BaseModel):
-    """Data model defining the structure for the dictionary of calculated similarity metrics.
-
-    All fields are optional as some metrics might fail or not be applicable.
-    """
-
-    # Basic String / Sequence Metrics (often on lowercase strings)
-    ratio: Optional[float] = Field(default=0.0, description="difflib.SequenceMatcher.ratio()")
-    normalized_levenshtein: Optional[float] = Field(default=0.0, description="Normalized Levenshtein similarity.")
-    jaro_winkler: Optional[float] = Field(default=0.0, description="Jaro-Winkler similarity.")
-    metric_lcs_similarity: Optional[float] = Field(
-        default=0.0,
-        description="Similarity based on Longest Common Subsequence.",
-    )
-    qgram2_distance: Optional[float] = Field(
-        default=0.0,
-        description="Q-gram distance (n=2). Lower is more similar.",
-    )
-    qgram3_distance: Optional[float] = Field(
-        default=0.0,
-        description="Q-gram distance (n=3). Lower is more similar.",
-    )
-    qgram4_distance: Optional[float] = Field(
-        default=0.0,
-        description="Q-gram distance (n=4). Lower is more similar.",
-    )
-
-    cosine_char_2gram: Optional[float] = Field(
-        default=0.0,
-        description="Cosine similarity on character 2-grams.",
-    )
-    jaccard_char_2gram: Optional[float] = Field(
-        default=0.0,
-        description="Jaccard similarity on character 2-grams.",
-    )
-
-    # RapidFuzz Metrics (optimized fuzzy matching, scores typically 0-1 after /100.0)
-    rfuzz_ratio: Optional[float] = Field(
-        default=0.0,
-        description="RapidFuzz simple ratio.",
-    )
-    rfuzz_partial_ratio: Optional[float] = Field(
-        default=0.0,
-        description="RapidFuzz partial ratio.",
-    )
-    rfuzz_token_set_ratio: Optional[float] = Field(
-        default=0.0,
-        description="RapidFuzz token set ratio.",
-    )
-    rfuzz_token_sort_ratio: Optional[float] = Field(
-        default=0.0,
-        description="RapidFuzz token sort ratio.",
-    )
-    rfuzz_wratio: Optional[float] = Field(
-        default=0.0,
-        description="RapidFuzz weighted ratio (can exceed 1.0).",
-    )
-    rfuzz_qratio: Optional[float] = Field(
-        default=0.0,
-        description="RapidFuzz quick ratio.",
-    )
-
-    # FuzzyWuzzy Metrics (if available, scores typically 0-1 after /100.0)
-    fz_uqratio: Optional[float] = Field(
-        default=0.0,
-        description="FuzzyWuzzy UQRatio (unicode quick ratio).",
-    )
-    fz_uwratio: Optional[float] = Field(
-        default=0.0,
-        description="FuzzyWuzzy UWRatio (unicode weighted ratio).",
-    )
-
-    # BLEU Score (translation quality metric, adapted for similarity)
-    bleu_score: Optional[float] = Field(
-        default=0.0,
-        description="BLEU score, typically BLEU-4.",
-    )
-
-    # BM25 Score (ranking function, adapted for similarity)
-    bm25: Optional[float] = Field(
-        default=0.0,
-        description="BM25 relevance score.",
-    )
-
-    # TF-IDF Based Metrics
-    tfidf_cosine_similarity: Optional[float] = Field(
-        default=0.0,
-        description="Cosine similarity of TF-IDF vectors.",
-    )
-    tfidf_euclidean_distance: Optional[float] = Field(
-        default=0.0,
-        description="Euclidean distance of TF-IDF vectors.",
-    )
-    tfidf_manhattan_distance: Optional[float] = Field(
-        default=0.0,
-        description="Manhattan distance of TF-IDF vectors.",
-    )
-    tfidf_jaccard_distance: Optional[float] = Field(
-        default=0.0,
-        description="Jaccard distance of binarized TF-IDF vectors.",
-    )
-    tfidf_hamming_distance: Optional[float] = Field(
-        default=0.0,
-        description="Hamming distance of binarized TF-IDF vectors.",
-    )
-    tfidf_minkowski_distance: Optional[float] = Field(
-        default=0.0,
-        description="Minkowski distance of TF-IDF vectors.",
-    )
-
-
 # --- TFIDFCalculator Class ---
 class TFIDFCalculator:
     """Computes TF-IDF vectors and derived similarity/distance metrics.
+
     Uses a configurable TfidfVectorizer from scikit-learn.
     """
 
@@ -432,10 +319,25 @@ class TFIDFCalculator:
         *,
         use_lemmatization: bool,
         use_stopwords: bool,
-        stop_words: Set[str],  # Expects a Set from parent
+        stop_words: set[str],  # Expects a set from parent
         tfidf_config: TfidfConfig,  # Expects a Pydantic config model
-        **tfidf_kwargs: Any,  # For any other TfidfVectorizer params
+        **tfidf_kwargs: Any,  # For any other TfidfVectorizer params  # noqa: ANN401
     ) -> None:
+        """Initialize the TFIDFCalculator with specified settings.
+
+        Args:
+            use_lemmatization (bool): If True, applies lemmatization during tokenization.
+            use_stopwords (bool): If True, filters out stopwords during tokenization.
+            stop_words (set[str]): The set of stopwords to use, if stopword filtering is enabled.
+            tfidf_config (TfidfConfig): Configuration for the TfidfVectorizer, including token pattern,
+            n-gram range, max and min document frequency.
+            **tfidf_kwargs (Any): Additional keyword arguments for the TfidfVectorizer.
+
+        Notes:
+            Initializes a TfidfVectorizer with custom tokenization and preprocessing
+            steps based on the provided configuration.
+
+        """
         self.use_lemmatization = use_lemmatization
         self.use_stopwords = use_stopwords
         self.frozen_stop_words = frozenset(stop_words)  # Store as frozenset for tokenizer
@@ -461,8 +363,9 @@ class TFIDFCalculator:
             self.use_stopwords,
         )
 
-    def _build_tokenizer(self) -> Optional[Callable[[str], List[str]]]:
-        """Builds a custom tokenizer function if lemmatization or custom stopword handling is enabled.
+    def _build_tokenizer(self) -> Optional[Callable[[str], list[str]]]:
+        """Build a custom tokenizer function if lemmatization or custom stopword handling is enabled.
+
         If not, returns None, letting TfidfVectorizer use its internal tokenization.
         """
         # Only build custom tokenizer if specific preprocessing is needed beyond sklearn's defaults
@@ -473,8 +376,8 @@ class TFIDFCalculator:
         # Frozenset is used for stopwords as it's hashable for potential caching in filter_stopwords
         current_stop_words = self.frozen_stop_words
 
-        def tokenizer_func(text: str) -> List[str]:
-            """Custom tokenization pipeline: tokenize, lemmatize (optional), filter stopwords (optional)."""
+        def tokenizer_func(text: str) -> list[str]:
+            """Tokenize text, optionally lemmatizing and filtering stopwords."""
             tokens = tokenize_text(text)  # Base tokenization (cached)
             if self.use_lemmatization:
                 tokens = lemmatize_tokens(tokens)  # Lemmatize (cached)
@@ -486,35 +389,39 @@ class TFIDFCalculator:
 
     def fit_transform(self, texts: Sequence[str]) -> csr_matrix:
         """Fits the TfidfVectorizer to the provided texts and transforms them into TF-IDF matrix.
+
         Returns a Compressed Sparse Row (CSR) matrix.
         """
         try:
             # fit_transform directly returns a csr_matrix
-            return self.vectorizer.fit_transform(texts)
+            return csr_matrix(self.vectorizer.fit_transform(texts))
         except Exception:
             logging.debug("TF-IDF fit_transform failed for input texts.", exc_info=True)
             # Return an empty sparse matrix with correct number of rows but zero columns (features)
             return csr_matrix((len(texts), 0), dtype=float)
 
-    def calculate_metrics_pairwise(self, text1: str, text2: str) -> Dict[str, Optional[float]]:
-        """Calculates TF-IDF based similarity and distance metrics for a pair of texts.
+    def calculate_metrics_pairwise(self, text1: str, text2: str) -> dict[str, Optional[float]]:
+        """Calculate TF-IDF based similarity and distance metrics for a pair of texts.
+
         Handles cases where no features are extracted (e.g., all stopwords).
         """
-        metrics: Dict[str, Optional[float]] = {}  # Initialize with all Nones
+        metrics: dict[str, Optional[float]] = {}  # Initialize with all Nones
         try:
             tfidf_matrix = self.fit_transform([text1, text2])
 
-            if tfidf_matrix.shape[1] == 0:  # No common features or all words were filtered
+            if tfidf_matrix.shape and tfidf_matrix.shape[1] == 0:  # No common features or all words were filtered
                 logging.debug("TF-IDF found no features for texts: '%s' vs '%s'", text1[:50], text2[:50])
                 # Define behavior for no features: 0 similarity, max/inf distance
                 metrics.update(
                     {
                         "tfidf_cosine_similarity": 0.0,
-                        "tfidf_jaccard_distance": 1.0,  # Max Jaccard distance (no intersection, non-empty union if texts differ)
+                        # Max Jaccard distance (no intersection, non-empty union if texts differ)
+                        "tfidf_jaccard_distance": 1.0,
                         "tfidf_euclidean_distance": float("inf"),
                         "tfidf_manhattan_distance": float("inf"),
                         "tfidf_minkowski_distance": float("inf"),
-                        "tfidf_hamming_distance": 1.0,  # All bits differ if texts are different and one is non-empty
+                        # All bits differ if texts are different and one is non-empty
+                        "tfidf_hamming_distance": 1.0,
                     },
                 )
                 # If both texts were empty string leading to no features, cosine could be 1.0.
@@ -571,38 +478,47 @@ class TFIDFCalculator:
 # --- BleuScorer Class ---
 class BleuScorer:
     """Computes BLEU (Bilingual Evaluation Understudy) score, adapted for similarity.
+
     Uses NLTK's sentence_bleu. Allows custom preprocessing.
     """
 
     def __init__(
         self,
-        stop_words: Set[str],  # Expects a Set from parent
+        stop_words: set[str],  # Expects a set from parent
         lemmatizer: Optional[WordNetLemmatizer],  # Can be None
         smoothing_function: Optional[Callable],  # e.g., SmoothingFunction().method1
-    ):
+    ) -> None:
+        """Initialize the BleuScorer with specified preprocessing settings.
+
+        Args:
+            stop_words (set[str]): A set of stop words to exclude during preprocessing.
+            lemmatizer (Optional[WordNetLemmatizer]): An instance of WordNetLemmatizer for lemmatization, if desired.
+            smoothing_function (Optional[Callable]): A smoothing function for BLEU score calculation.
+            Defaults to NLTK's method1.
+
+        """
         self.lemmatizer = lemmatizer
         self.frozen_stop_words = frozenset(stop_words)  # For caching preprocessing
         self.smoothing = smoothing_function or SmoothingFunction().method1  # Default NLTK smoothing
         logging.debug("BleuScorer initialized.")
 
     @lru_cache(maxsize=1024)  # Cache preprocessed text based on its content
-    def _preprocess_bleu_text(self, text: str) -> Tuple[str, ...]:
+    def _preprocess_bleu_text(self, text: str) -> tuple[str, ...]:
         """Preprocesses text for BLEU: tokenize, lemmatize (optional), filter stopwords."""
         tokens = tokenize_text(text)  # Base tokenization (cached)
         if self.lemmatizer:
             tokens = lemmatize_tokens(tokens)  # Lemmatize (cached)
         # BLEU conventionally might not remove stopwords or uses specific recipes.
         # Here, we apply the general stopword list for consistency.
-        tokens = filter_stopwords(tokens, self.frozen_stop_words)  # Filter (cached)
-        return tokens
+        return filter_stopwords(tokens, self.frozen_stop_words)  # Filter (cached)
 
     def _calculate_bleu(
         self,
-        ref_tokens_list: List[List[str]],  # List of tokenized reference sentences
-        hyp_tokens: List[str],  # Tokenized hypothesis sentence
-        weights: Tuple[float, ...],  # N-gram weights, e.g., (0.25, 0.25, 0.25, 0.25) for BLEU-4
+        ref_tokens_list: list[list[str]],  # list of tokenized reference sentences
+        hyp_tokens: list[str],  # Tokenized hypothesis sentence
+        weights: tuple[float, ...],  # N-gram weights, e.g., (0.25, 0.25, 0.25, 0.25) for BLEU-4
     ) -> float:
-        """Internal BLEU calculation using NLTK, with error handling."""
+        """Calculate the BLEU score using NLTK, with error handling."""
         if not hyp_tokens or not any(ref_tokens_list):  # Must have hypothesis and at least one reference
             return 0.0
         try:
@@ -618,7 +534,7 @@ class BleuScorer:
             )
             return 0.0
         except Exception:
-            logging.exception("Unexpected error during NLTK sentence_bleu calculation.", exc_info=True)
+            logging.exception("Unexpected error during NLTK sentence_bleu calculation.")
             return 0.0
 
     def score_all_ngrams(self, references: Union[str, Sequence[str]], hypothesis: str, max_n: int = 4) -> BleuResult:
@@ -639,7 +555,7 @@ class BleuScorer:
         if not ref_tokens_list_valid:  # All references became empty
             return BleuResult(score=0.0, cumulative_ngram_scores=dict.fromkeys(range(1, max_n + 1), 0.0))
 
-        cumulative_scores: Dict[int, float] = {}
+        cumulative_scores: dict[int, float] = {}
         for n_val in range(1, max_n + 1):
             # Standard cumulative weights: (1/n, 1/n, ..., 1/n) for n components
             current_weights = tuple(1.0 / n_val for _ in range(n_val))
@@ -665,8 +581,8 @@ def calculate_bm25(reference: str, hypothesis: str) -> Optional[float]:
     try:
         # BM25 expects a corpus of tokenized documents and a tokenized query.
         # Here, the "corpus" is just the single reference document.
-        tokenized_corpus: List[List[str]] = [list(tokenize_text(reference))]
-        tokenized_query: List[str] = list(tokenize_text(hypothesis))
+        tokenized_corpus: list[list[str]] = [list(tokenize_text(reference))]
+        tokenized_query: list[str] = list(tokenize_text(hypothesis))
 
         # Handle cases where tokenization results in empty lists
         if not tokenized_corpus[0] or not tokenized_query:
@@ -678,25 +594,8 @@ def calculate_bm25(reference: str, hypothesis: str) -> Optional[float]:
         # doc_scores will be a list/array with one score corresponding to the reference
         return float(doc_scores[0]) if doc_scores is not None and len(doc_scores) > 0 else 0.0
     except Exception:
-        logging.debug(f"BM25 calculation failed for '{reference[:50]}...' vs '{hypothesis[:50]}...'", exc_info=True)
+        logging.exception(f"BM25 calculation failed for '{reference[:50]}...' vs '{hypothesis[:50]}...'")
         return None
-
-
-# --- Main SimilarityCalculator Class ---
-class SimilarityCalculatorConfig(BaseModel):
-    """Configuration for the main SimilarityCalculator.
-
-    Allows setting preferences for lemmatization, stopwords, and TF-IDF parameters.
-    """
-
-    use_lemmatization: bool = Field(default=True, description="Enable/disable lemmatization.")
-    use_stopwords: bool = Field(default=True, description="Enable/disable stopword removal.")
-    custom_stop_words: Optional[List[str]] = Field(default=None, description="List of custom stopwords to use or add.")
-    tfidf_config: TfidfConfig = Field(
-        default_factory=TfidfConfig,
-        description="Configuration for TF-IDF vectorization.",
-    )
-    # bleu_smoothing_function_name: Optional[str] = None # Example if passing smoothing by name
 
 
 class SimilarityCalculator:
@@ -710,13 +609,14 @@ class SimilarityCalculator:
         """Initialize a SimilarityCalculator instance with the provided configuration.
 
         Args:
-            config (Optional[SimilarityCalculatorConfig]): The configuration object to use. If None, uses the default config.
+            config (Optional[SimilarityCalculatorConfig]): The configuration object to use.
+            If None, uses the default config.
 
         Notes:
             The configuration object is used to control the behavior of the calculators and similarity functions used.
-            The current implementation does not support passing custom stopwords or lemmatization settings for the Bleu scorer.
-            For parallel processing, the config is pickled and sent to workers, so any custom stopwords or lemmatization
-            settings must be picklable.
+            The current implementation does not support passing custom stopwords or lemmatization settings
+            for the Bleu scorer.For parallel processing, the config is pickled and sent to workers,
+            so any custom stopwords or lemmatization settings must be picklable.
 
         """
         logging.info("Initializing SimilarityCalculator...")
@@ -731,7 +631,7 @@ class SimilarityCalculator:
         # If it's non-empty, we use only those (or combine, depending on desired logic).
         # Current logic: if custom_stop_words is provided (even empty), it overrides defaults.
         # To combine: self.stop_words = get_default_stopwords().union(set(_provided_sw_list))
-        self.stop_words: Set[str] = (
+        self.stop_words: set[str] = (
             set(_provided_sw_list) if cfg.custom_stop_words is not None else get_default_stopwords()
         )
 
@@ -777,7 +677,7 @@ class SimilarityCalculator:
             logging.warning("Invalid input types for similarity calculation. Both texts must be strings.")
             return SimilarityMetrics()  # Return default model with Nones
 
-        raw_results: Dict[str, Optional[float]] = {}  # Dictionary to accumulate raw scores
+        raw_results: dict[str, Optional[float]] = {}  # Dictionary to accumulate raw scores
         s1_lower, s2_lower = text1.lower(), text2.lower()  # Common preprocessed versions
 
         # --- 1. Basic String / Sequence Metrics ---
@@ -850,9 +750,9 @@ class SimilarityCalculator:
 
     def calculate_multiple_pairs(
         self,
-        text_pairs: Iterable[Tuple[str, str]],
+        text_pairs: Iterable[tuple[str, str]],
         max_workers: Optional[int] = None,
-    ) -> List[SimilarityMetrics]:
+    ) -> list[SimilarityMetrics]:
         """Calculate similarity metrics for multiple text pairs in parallel using ProcessPoolExecutor.
 
         Args:
@@ -889,8 +789,8 @@ class SimilarityCalculator:
         # Convert the Pydantic config model to a dictionary for sending to workers
         picklable_config_dict = picklable_config.model_dump()
 
-        futures_map: Dict[Any, int] = {}  # Maps Future instances to original pair index
-        results_unordered: Dict[int, SimilarityMetrics] = {}  # Stores results indexed by original pair index
+        futures_map: dict[Any, int] = {}  # Maps Future instances to original pair index
+        results_unordered: dict[int, SimilarityMetrics] = {}  # Stores results indexed by original pair index
 
         try:
             with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -929,7 +829,7 @@ class SimilarityCalculator:
 
 # --- Worker Function for Parallel Execution ---
 # This function must be defined at the top level of the module to be picklable by multiprocessing.
-def _worker_calculate_single_pair(config_dict: Dict[str, Any], text1: str, text2: str) -> SimilarityMetrics:
+def _worker_calculate_single_pair(config_dict: dict[str, Any], text1: str, text2: str) -> SimilarityMetrics:
     """Worker function executed by each process in the ProcessPoolExecutor.
 
     It re-initializes a SimilarityCalculator using the provided configuration dictionary
@@ -965,7 +865,7 @@ def _worker_calculate_single_pair(config_dict: Dict[str, Any], text1: str, text2
 if __name__ == "__main__":
     # Configure logging for the example execution
     logging.basicConfig(
-        level=logging.INFO,  # Set to INFO for general operational messages
+        level=logging.INFO,  # set to INFO for general operational messages
         format="%(asctime)s - %(levelname)s - %(processName)s - %(module)s - %(message)s",
     )
     # For more detailed NLTK download/TFIDF/BLEU messages, set the module's logger to DEBUG

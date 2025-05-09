@@ -7,9 +7,11 @@ and retrieves configuration settings.
 import logging
 import os
 
+from sentence_transformers import SentenceTransformer
+
+from app_types import SimilarityCalculatorConfig
 from config import get_settings
 from logger_utill import setup_global_logger
-from sentence_transformers import SentenceTransformer
 
 settings = get_settings()
 
@@ -32,6 +34,8 @@ app_logger.debug(f"Full settings object: {settings.model_dump_json(indent=2)}")
 app_logger.info(
     f"Initializing semantic model '{settings.semantic.model_name}' on device '{settings.semantic.device}'...",
 )
+
+similarity_config = SimilarityCalculatorConfig()
 
 semantic_model = SentenceTransformer(
     settings.semantic.model_name,
