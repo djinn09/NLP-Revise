@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from app_types import EssayScores
+from key_word_match import SimilarityCalculator
 from semantic_match import SemanticCosineSimilarity
-from settings import semantic_model, settings
+from settings import semantic_model, settings, similarity_config
 
 
 def score_essay(essay: str, reference: str) -> EssayScores:
@@ -22,13 +23,17 @@ def score_essay(essay: str, reference: str) -> EssayScores:
         chunk_size=settings.semantic.chunk_size,
         batch_size=settings.semantic.batch_size,
     )
-
+    # Initialize the keyword similarity calculator
+    keyword_similarity_calculator = SimilarityCalculator(
+        config=similarity_config,
+    )
     # Calculate the semantic similarity score
     semantic_score = sentence_semantic_model.calculate_similarity(
         essay,
         reference,
         metrics_to_calculate=["cosine"],
     )
+    similarity_metrics = keyword_similarity_calculator.calculate_single_pair(reference, essay)
     if semantic_score is not None:
-        return EssayScores(semantic_score=semantic_score.cosine)
-    return EssayScores()
+        return EssayScores(semantic_score=semantic_score.cosine, similarity_metrics=similarity_metrics)
+    return EssayScores(similarity_metrics=similarity_metrics)
