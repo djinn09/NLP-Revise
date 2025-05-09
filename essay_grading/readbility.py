@@ -1,4 +1,3 @@
-from pprint import pprint
 
 import numpy as np
 import textstat
@@ -25,8 +24,7 @@ def get_readability_metrics(text):
 
 
 def compare_metrics(metrics1, metrics2):
-    diff = {k: round(abs(metrics1[k] - metrics2[k]), 4) for k in sorted(metrics1)}
-    return diff
+    return {k: round(abs(metrics1[k] - metrics2[k]), 4) for k in sorted(metrics1)}
 
 
 def cosine_similarity(m1, m2):
@@ -58,6 +56,5 @@ if __name__ == "__main__":
         print(f"{key.upper():30} | {val1:8.2f} | {val2:8.2f} | {diff:8.2f}")
 
     print("\n=== Absolute Differences ===")
-    pprint(differences)
 
     print(f"\nCosine Similarity between texts: {similarity:.4f}")
