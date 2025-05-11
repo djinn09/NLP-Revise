@@ -10,13 +10,13 @@ It includes:
 from __future__ import annotations
 
 import logging
-import math  # Re-added for isnan/isinf checks
-import sys  # Added for sys.exit()
-from typing import Union  # Dict, List, Optional removed as unused or replaced by builtins
+import math
+import sys
+from typing import List, Optional, Union  # Added Tuple
 
 import numpy as np
 import textstat
-from numpy.linalg import norm as np_norm  # Alias to avoid conflict if norm is used elsewhere
+from numpy.linalg import norm as np_norm
 from pydantic import BaseModel, Field, field_validator
 from sklearn.preprocessing import StandardScaler
 
@@ -53,20 +53,20 @@ class BaseReadabilityMetrics(BaseModel):
         "sentence_count",
         "syllable_count",
         "lexicon_count",
-        mode="before",  # Validate before Pydantic's type conversion
+        mode="before",
     )
     @classmethod
-    def ensure_integer_counts(cls, value: float) -> int:  # Changed Union[int, float] to float
+    def ensure_integer_counts(cls, value: float) -> int:
         """Ensure count metrics are integers. Textstat might return floats."""
         if isinstance(value, float):
             if math.isnan(value) or math.isinf(value):
                 msg = f"Count metric cannot be NaN or infinity, got {value}"
-                raise ValueError(msg)  # Keep ValueError for NaN/inf as it's about value, not type
-            return round(value)
+                raise ValueError(msg)
+            return round(value)  # Pydantic will convert to int if field type is int
         if isinstance(value, int):
-            return value  # Corrected: no redundant int() cast
+            return value
         msg = f"Count metric must be a number (int or float), got {type(value)}"
-        raise TypeError(msg)  # Changed to TypeError
+        raise TypeError(msg)
 
     @field_validator(
         "flesch_reading_ease",
@@ -81,11 +81,14 @@ class BaseReadabilityMetrics(BaseModel):
         mode="before",
     )
     @classmethod
-    def ensure_float_scores(cls, value: float) -> float:  # Changed Union[int, float] to float
+    def ensure_float_scores(cls, value: float) -> float:
         """Ensure score metrics are floats."""
-        if not isinstance(value, (int, float)):  # Keep check for int and float
+        if not isinstance(value, (int, float)):
             msg = f"Score metric must be a number, got {type(value)}"
-            raise TypeError(msg)  # Changed to TypeError
+            raise TypeError(msg)
+        if math.isnan(value) or math.isinf(value):  # Check for NaN/inf before float conversion
+            msg = f"Score metric cannot be NaN or infinity, got {value}"
+            raise ValueError(msg)
         return float(value)
 
 
@@ -107,12 +110,12 @@ class ReadabilityMetricsNormalized(BaseReadabilityMetrics):
     normalization if normalization can result in negative values
     (e.g. standard scaler). We can override or remove those specific
     field constraints for normalized data if needed. For simplicity
-    here, we keep them, assuming normalization mostly scales around 0.
+    here,
     """
 
     difficult_words: float = Field(..., description="Normalized count of difficult words.")
     sentence_count: float = Field(..., description="Normalized count of sentences.")
-    avg_sentence_length: float = Field(..., description="Normalized average words per sentence.")
+    avg_sentence_length: float = Field(..., description="Normalized average words per sentence.")  # Already float
     syllable_count: float = Field(..., description="Normalized total number of syllables.")
     lexicon_count: float = Field(..., description="Normalized total words (punctuation removed).")
 
@@ -137,6 +140,21 @@ class MetricDifferencesRaw(BaseModel):
     avg_sentence_length: float = Field(..., ge=0.0)
     syllable_count: float = Field(..., ge=0.0)
     lexicon_count: float = Field(..., ge=0.0)
+
+
+class ReadabilityAnalysisResult(BaseModel):
+    """Holds the comprehensive results of a readability analysis between two texts."""
+
+    student_text_raw_metrics: ReadabilityMetricsRaw
+    model_text_raw_metrics: ReadabilityMetricsRaw
+    raw_metric_differences: MetricDifferencesRaw
+    student_text_normalized_metrics: Optional[ReadabilityMetricsNormalized] = None
+    model_text_normalized_metrics: Optional[ReadabilityMetricsNormalized] = None
+    euclidean_distance_normalized: Optional[float] = None
+    manhattan_distance_normalized: Optional[float] = None
+    # Optional: could include original texts if desired for the result package
+    # student_text_input: str
+    # model_text_input: str
 
 
 # --- Functions ---
@@ -166,12 +184,11 @@ def get_readability_metrics(text: str) -> ReadabilityMetricsRaw:
     """
     if not isinstance(text, str):
         logger.error("Input 'text' for readability metrics must be a string.")
-        # EM101: assign to variable first; TRY003: avoid long messages
         msg = "Input 'text' must be a string."
         raise TypeError(msg)
 
     if not text.strip():
-        logger.warning("Input text is empty or whitespace only. Readability metrics will likely be defaults or zeros.")
+        logger.warning("Input text is empty or whitespace only. Returning default zero metrics.")
         return ReadabilityMetricsRaw(
             flesch_reading_ease=0.0,
             flesch_kincaid_grade=0.0,
@@ -188,6 +205,7 @@ def get_readability_metrics(text: str) -> ReadabilityMetricsRaw:
             lexicon_count=0,
         )
     try:
+        # This comment is necessary for clarity. Do not remove the following line.
         raw_metrics_dict = {
             "flesch_reading_ease": textstat.flesch_reading_ease(text),  # type: ignore[attr-defined]
             "flesch_kincaid_grade": textstat.flesch_kincaid_grade(text),  # type: ignore[attr-defined]
@@ -204,30 +222,13 @@ def get_readability_metrics(text: str) -> ReadabilityMetricsRaw:
             "lexicon_count": textstat.lexicon_count(text, removepunct=True),  # type: ignore[attr-defined]
         }
         return ReadabilityMetricsRaw(**raw_metrics_dict)
-    except Exception:
-        # G201: Use logger.exception
+    except Exception:  # Catch specific textstat errors if known, or generic Exception
         logger.exception(f"Error calculating readability metrics for text: '{text[:50]}...'")
-        raise
+        raise  # Re-raise the caught exception
 
 
-def normalize_metrics(metrics_list: list[ReadabilityMetricsRaw]) -> list[ReadabilityMetricsNormalized]:
-    """Standardize each readability feature across a list of texts.
-
-    Uses `sklearn.preprocessing.StandardScaler` to achieve zero mean
-    and unit variance.
-
-    Args:
-        metrics_list: A list of ReadabilityMetricsRaw Pydantic model
-                      instances, where each instance represents the raw
-                      metrics for one text.
-
-    Returns:
-        A list of ReadabilityMetricsNormalized Pydantic model instances,
-        with metrics scaled. Returns an empty list if the input is empty.
-        If input list contains only one item, StandardScaler will result
-        in all zeros.
-
-    """
+def normalize_metrics(metrics_list: List[ReadabilityMetricsRaw]) -> List[ReadabilityMetricsNormalized]:
+    """Standardize each readability feature across a list of texts."""
     if not metrics_list:
         logger.warning("normalize_metrics received an empty list. Returning empty list.")
         return []
@@ -235,57 +236,47 @@ def normalize_metrics(metrics_list: list[ReadabilityMetricsRaw]) -> list[Readabi
         msg = "All items in metrics_list must be ReadabilityMetricsRaw instances."
         raise TypeError(msg)
 
+    # Use the defined fields from the Pydantic model to ensure consistent order
     keys = list(ReadabilityMetricsRaw.model_fields.keys())
-
     try:
-        mat = np.array(
-            [[getattr(m, key) for key in keys] for m in metrics_list],
-            dtype=float,  # COM812: Trailing comma
-        )
+        mat = np.array([[getattr(m, key) for key in keys] for m in metrics_list], dtype=float)
     except Exception as e:
         logger.exception("Error converting metrics list to NumPy array")
         msg = "Could not convert metrics list to NumPy array. Check metric values."
         raise ValueError(msg) from e
 
-    if mat.shape[0] < 1:
+    if mat.shape[0] == 0:  # Should have been caught by `if not metrics_list:`
         return []
 
     scaler = StandardScaler()
     if mat.shape[0] == 1:
-        logger.warning(
-            "Normalizing metrics with only one sample. "
-            "StandardScaler will produce all zeros for the normalized metrics.",
-        )
+        logger.warning("Normalizing metrics with only one sample. StandardScaler will produce all zeros.")
         mat_norm = np.zeros_like(mat, dtype=float)
     else:
         try:
             mat_norm = scaler.fit_transform(mat)
-        except ValueError as e_scale:
-            log_msg = (  # E501: Line too long
+        except ValueError as e_scale:  # e.g., zero variance in a column
+            log_msg = (
                 f"Error during StandardScaler fit_transform: {e_scale}. "
-                "This can happen if a feature has zero variance "
-                "(all values are the same)."
+                "This can happen if a feature has zero variance (all values are the same)."
             )
             logger.exception(log_msg)
-            # EM102 (f-string), TRY003 (long message)
             err_msg = f"StandardScaler failed, possibly due to zero variance in a feature: {e_scale}"
             raise ValueError(err_msg) from e_scale
 
-    normalized_metrics_obj_list: list[ReadabilityMetricsNormalized] = []
+    normalized_metrics_obj_list: List[ReadabilityMetricsNormalized] = []
     for row in mat_norm:
-        # B905: Add strict=True to zip
         norm_dict = dict(zip(keys, row, strict=True))
         try:
             normalized_metrics_obj_list.append(ReadabilityMetricsNormalized(**norm_dict))
         except Exception as e_pydantic:
-            log_msg = (  # E501: Line too long
+            log_msg = (
                 f"Error creating ReadabilityMetricsNormalized model from "
                 f"normalized data: {norm_dict}. Error: {e_pydantic}"
             )
             logger.exception(log_msg)
             msg = "Failed to reconstruct Pydantic model for normalized metrics."
             raise ValueError(msg) from e_pydantic
-
     return normalized_metrics_obj_list
 
 
@@ -308,18 +299,16 @@ def calculate_euclidean_distance(
     if not isinstance(metrics1, BaseReadabilityMetrics) or not isinstance(metrics2, BaseReadabilityMetrics):
         msg = "Inputs must be instances of a BaseReadabilityMetrics model."
         raise TypeError(msg)
-
-    keys = list(BaseReadabilityMetrics.model_fields.keys())
+    keys = list(BaseReadabilityMetrics.model_fields.keys())  # Ensure consistent order
     arr1 = np.array([getattr(metrics1, key) for key in keys], dtype=float)
     arr2 = np.array([getattr(metrics2, key) for key in keys], dtype=float)
-
     distance = np_norm(arr1 - arr2)
     return float(distance)
 
 
 def calculate_manhattan_distance(
     metrics1: Union[ReadabilityMetricsRaw, ReadabilityMetricsNormalized],
-    metrics2: Union[ReadabilityMetricsRaw, ReadabilityMetricsNormalized],  # COM812: Trailing comma
+    metrics2: Union[ReadabilityMetricsRaw, ReadabilityMetricsNormalized],
 ) -> float:
     """Compute the Manhattan (L1) distance between two feature vectors.
 
@@ -336,18 +325,16 @@ def calculate_manhattan_distance(
     if not isinstance(metrics1, BaseReadabilityMetrics) or not isinstance(metrics2, BaseReadabilityMetrics):
         msg = "Inputs must be instances of a BaseReadabilityMetrics model."
         raise TypeError(msg)
-
     keys = list(BaseReadabilityMetrics.model_fields.keys())
     arr1 = np.array([getattr(metrics1, key) for key in keys], dtype=float)
     arr2 = np.array([getattr(metrics2, key) for key in keys], dtype=float)
-
-    distance = np.abs(arr1 - arr2).sum()  # COM812 for this line is likely a linter error, not fixed.
+    distance = np.abs(arr1 - arr2).sum()
     return float(distance)
 
 
 def compare_raw_metrics_absolute_diff(
     metrics1: ReadabilityMetricsRaw,
-    metrics2: ReadabilityMetricsRaw,  # COM812: Trailing comma
+    metrics2: ReadabilityMetricsRaw,
 ) -> MetricDifferencesRaw:
     """Compute absolute differences between raw scores.
 
@@ -366,80 +353,154 @@ def compare_raw_metrics_absolute_diff(
     if not isinstance(metrics1, ReadabilityMetricsRaw) or not isinstance(metrics2, ReadabilityMetricsRaw):
         msg = "Inputs must be ReadabilityMetricsRaw instances for raw comparison."
         raise TypeError(msg)
-
     m1_dict = metrics1.model_dump()
     m2_dict = metrics2.model_dump()
-
     differences_dict = {key: abs(m1_dict[key] - m2_dict[key]) for key in m1_dict}
     return MetricDifferencesRaw(**differences_dict)
+
+
+# --- Main Analysis Function ---
+
+
+def perform_readability_analysis(
+    student_text: str, model_text: str, additional_texts_for_corpus: Optional[List[str]] = None
+) -> ReadabilityAnalysisResult:
+    """Perform a readability analysis comparing a student text to a model text.
+
+    Args:
+        student_text: The text written by the student.
+        model_text: The reference or model text.
+        additional_texts_for_corpus: An optional list of other texts to include
+                                     in the corpus for normalization. Normalization
+                                     is more meaningful with a larger corpus.
+
+    Returns:
+        A ReadabilityAnalysisResult Pydantic model containing all raw metrics,
+        differences, normalized metrics (if successful), and distances.
+
+    """
+    logger.info("Performing readability analysis...")
+
+    # --- Compute Raw Metrics ---
+    try:
+        logger.debug("Computing raw metrics for student text...")
+        student_metrics_raw = get_readability_metrics(student_text)
+        logger.debug("Computing raw metrics for model text...")
+        model_metrics_raw = get_readability_metrics(model_text)
+    except Exception:  # Catch errors from get_readability_metrics
+        logger.exception("Fatal error computing raw metrics:")
+        # Depending on requirements, could return a partial result or re-raise
+        raise  # Re-raise to indicate analysis could not complete
+
+    # --- Show Raw Differences (for interpretability) ---
+    logger.debug("Comparing raw metrics (student vs. model)...")
+    raw_differences = compare_raw_metrics_absolute_diff(student_metrics_raw, model_metrics_raw)
+
+    # --- Normalize Metrics Across a "Corpus" ---
+    corpus_texts = [student_text, model_text]
+    if additional_texts_for_corpus:
+        corpus_texts.extend(additional_texts_for_corpus)
+
+    corpus_raw_metrics: List[ReadabilityMetricsRaw] = []
+    for i, text_item in enumerate(corpus_texts):
+        try:
+            corpus_raw_metrics.append(get_readability_metrics(text_item))
+        except Exception:
+            logger.exception(
+                f"Could not get raw metrics for corpus text at index {i}: '{text_item[:50]}...'.",
+            )
+            # Optionally skip this text or handle error
+            # For now, we'll let it fail if any corpus text metric generation fails,
+            # or one could append a default zero metric model.
+
+    norm_student_metrics: Optional[ReadabilityMetricsNormalized] = None
+    norm_model_metrics: Optional[ReadabilityMetricsNormalized] = None
+    euclidean_dist_norm: Optional[float] = None
+    manhattan_dist_norm: Optional[float] = None
+    meaningful_sample_size = 2
+    if len(corpus_raw_metrics) >= meaningful_sample_size:  # Need at least 2 samples for meaningful normalization by StandardScaler
+        logger.info(f"Normalizing metrics across a corpus of {len(corpus_raw_metrics)} texts...")
+        try:
+            corpus_normalized_metrics: List[ReadabilityMetricsNormalized] = normalize_metrics(corpus_raw_metrics)
+            if len(corpus_normalized_metrics) == len(
+                corpus_raw_metrics
+            ):  # Check if normalization returned expected number of items
+                norm_student_metrics = corpus_normalized_metrics[0]
+                norm_model_metrics = corpus_normalized_metrics[1]
+
+                # --- Compute Distances on Normalized Features ---
+                logger.debug("Computing distances on normalized features (student vs. model)...")
+                euclidean_dist_norm = calculate_euclidean_distance(norm_student_metrics, norm_model_metrics)
+                manhattan_dist_norm = calculate_manhattan_distance(norm_student_metrics, norm_model_metrics)
+            else:
+                logger.error(
+                    "Normalization returned a different number of items than input. Skipping normalized metrics."
+                )
+        except ValueError as e_norm_value:  # Catch errors from normalize_metrics (e.g., zero variance)
+            logger.warning(
+                f"Failed to normalize metrics due to ValueError: {e_norm_value}. Normalized distances will be None.",
+                exc_info=True,
+            )
+        except Exception as e_norm_unexpected:  # Catch any other unexpected errors during normalization
+            logger.exception(
+                "Unexpected error during metric normalization. Normalized distances will be None.",
+            )
+    else:
+        logger.warning(
+            f"Corpus size is {len(corpus_raw_metrics)}, which is less than 2. Skipping normalization and normalized distances."
+        )
+
+    return ReadabilityAnalysisResult(
+        student_text_raw_metrics=student_metrics_raw,
+        model_text_raw_metrics=model_metrics_raw,
+        raw_metric_differences=raw_differences,
+        student_text_normalized_metrics=norm_student_metrics,
+        model_text_normalized_metrics=norm_model_metrics,
+        euclidean_distance_normalized=euclidean_dist_norm,
+        manhattan_distance_normalized=manhattan_dist_norm,
+    )
 
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
     logger.info("Starting readability metrics processing example.")
 
-    # E501: Lines too long
-    student_text = (
+    # Example texts: student vs. model essay
+    student_text_main = (
         "Education is the passport to the future, for tomorrow belongs to "
         "those who prepare for it today. The journey of learning is lifelong."
     )
-    model_text = (
+    model_text_main = (
         "The future belongs to those who prepare for it today; "
         "education is their passport. Learning is a continuous voyage."
     )
-    another_text = "This is a very simple and short text. It has few words. Reading is easy."
+    # Add more texts to make normalization meaningful
+    additional_corpus_texts = [
+        "This is a very simple and short text. It has few words. Reading is easy.",
+        "Conversely, academic papers often employ complex sentence structures and specialized vocabulary, "
+        "resulting in higher readability scores indicating greater difficulty.",
+        "Another example to provide variance for the scaler.",
+    ]
 
     try:
-        logger.info("Computing raw metrics for student text...")
-        student_metrics_raw = get_readability_metrics(student_text)
-        logger.info("Computing raw metrics for model text...")
-        model_metrics_raw = get_readability_metrics(model_text)
-        logger.info("Computing raw metrics for another text...")
-        another_metrics_raw = get_readability_metrics(another_text)
-    except Exception:
-        logger.exception("Failed to compute raw readability metrics:")
-        sys.exit(1)  # PLR1722: Use sys.exit()
+        analysis_results = perform_readability_analysis(
+            student_text_main, model_text_main, additional_texts_for_corpus=additional_corpus_texts
+        )
+    except Exception as e_analysis:
+        logger.critical(f"Readability analysis failed critically: {e_analysis}", exc_info=True)
+        sys.exit(1)
 
-    logger.info("Comparing raw metrics (student vs. model)...")
-    raw_differences = compare_raw_metrics_absolute_diff(student_metrics_raw, model_metrics_raw)
-
-    corpus_raw_metrics: list[ReadabilityMetricsRaw] = [student_metrics_raw, model_metrics_raw, another_metrics_raw]
-    logger.info(f"Normalizing metrics across a corpus of {len(corpus_raw_metrics)} texts...")
-    try:
-        corpus_normalized_metrics: list[ReadabilityMetricsNormalized] = normalize_metrics(corpus_raw_metrics)
-        len_of_normalized_metrics = 3
-        # Ensure we have enough items before indexing
-        if len(corpus_normalized_metrics) < len_of_normalized_metrics:
-            logger.error("Normalization resulted in fewer metrics than expected. Exiting.")
-            sys.exit(1)
-        norm_student_metrics = corpus_normalized_metrics[0]
-        norm_model_metrics = corpus_normalized_metrics[1]
-        # norm_another_metrics = corpus_normalized_metrics[2] # Not used later, but good to have
-    except ValueError:
-        logger.exception("Failed to normalize metrics:")
-        logger.warning("Proceeding with raw metrics for distance calculations due to normalization failure.")
-        # Ensure types are compatible if falling back. This is tricky.
-        # For this example, we'll assume they are, but in prod this needs care.
-        norm_student_metrics = student_metrics_raw  # type: ignore[assignment]
-        norm_model_metrics = model_metrics_raw  # type: ignore[assignment]
-    except Exception:
-        logger.exception("Unexpected error during metric normalization:")
-        sys.exit(1)  # PLR1722: Use sys.exit()
-
-    logger.info("Computing distances on normalized features (student vs. model)...")
-    euclidean_dist_norm = calculate_euclidean_distance(norm_student_metrics, norm_model_metrics)
-    manhattan_dist_norm = calculate_manhattan_distance(norm_student_metrics, norm_model_metrics)
-
+    # --- Output Results from the analysis_results object ---
     print("\n=== Raw Readability Metrics & Differences (Student vs. Model) ===")
     print(f"{'Metric':<30} | {'Student (Raw)':>15} | {'Model (Raw)':>12} | {'Abs Diff':>10}")
     print("-" * 73)
-    for key in ReadabilityMetricsRaw.model_fields:
-        s_val = getattr(student_metrics_raw, key)
-        m_val = getattr(model_metrics_raw, key)
-        d_val = getattr(raw_differences, key)
+    for key in ReadabilityMetricsRaw.model_fields:  # Iterate based on Pydantic model fields
+        s_val = getattr(analysis_results.student_text_raw_metrics, key)
+        m_val = getattr(analysis_results.model_text_raw_metrics, key)
+        d_val = getattr(analysis_results.raw_metric_differences, key)
 
         fmt = "{:.0f}" if key in {"difficult_words", "sentence_count", "syllable_count", "lexicon_count"} else "{:.2f}"
-        # E501: Line too long, COM812 (related to print call if multi-line)
+
         line_to_print = (
             f"{key.replace('_', ' ').title():<30} | "
             f"{fmt.format(s_val):>15} | "
@@ -448,18 +509,29 @@ if __name__ == "__main__":
         )
         print(line_to_print)
 
-    print("\n=== Normalized Readability Metrics (Example: Student Text) ===")
-    print(f"{'Metric':<30} | {'Normalized Value':>18}")
-    print("-" * 53)
-    for key in ReadabilityMetricsNormalized.model_fields:
-        # Check if norm_student_metrics is BaseReadabilityMetrics, which might not have all normalized fields as float
-        # This can happen if normalization failed and it fell back to raw metrics.
-        # For this example, we assume norm_student_metrics is ReadabilityMetricsNormalized or compatible.
-        norm_val = getattr(norm_student_metrics, key)
-        print(f"{key.replace('_', ' ').title():<30} | {norm_val:>18.4f}")
+    if analysis_results.student_text_normalized_metrics:
+        print("\n=== Normalized Readability Metrics (Example: Student Text) ===")
+        print(f"{'Metric':<30} | {'Normalized Value':>18}")
+        print("-" * 53)
+        for key in ReadabilityMetricsNormalized.model_fields:
+            norm_val = getattr(analysis_results.student_text_normalized_metrics, key)
+            print(f"{key.replace('_', ' ').title():<30} | {norm_val:>18.4f}")
+    else:
+        print("\n=== Normalized Readability Metrics could not be computed. ===")
 
-    print("\n=== Distances on Normalized Readability Features (Student vs. Model) ===")
-    print(f"Euclidean Distance (Normalized): {euclidean_dist_norm:.4f}")
-    print(f"Manhattan Distance (Normalized): {manhattan_dist_norm:.4f}")
+    if (
+        analysis_results.euclidean_distance_normalized is not None
+        and analysis_results.manhattan_distance_normalized is not None
+    ):
+        print("\n=== Distances on Normalized Readability Features (Student vs. Model) ===")
+        print(f"Euclidean Distance (Normalized): {analysis_results.euclidean_distance_normalized:.4f}")
+        print(f"Manhattan Distance (Normalized): {analysis_results.manhattan_distance_normalized:.4f}")
+    else:
+        print("\n=== Distances on Normalized Readability Features could not be computed. ===")
+
+    # Note: In an essay-scoring pipeline, these distances (raw or normalized)
+    # can be valuable features themselves, combined with other text features,
+    # or used to assess stylistic similarity/dissimilarity to model essays.
+    # Normalization is crucial if these distances are fed into algorithms sensitive to feature scales.
 
     logger.info("Readability metrics processing example finished.")
