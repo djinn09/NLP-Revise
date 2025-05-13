@@ -1,35 +1,230 @@
+# Use annotations for cleaner type hinting (requires Python 3.7+)
 from __future__ import annotations
 
+import logging
 import re
 import sys
 import time
 import warnings
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Optional  # Added Union earlier, now just using specific types
 
 import networkx as nx
 import numpy as np
-import spacy
+from pydantic import BaseModel, Field  # Pydantic imports
 from scipy.cluster.hierarchy import cophenet, fcluster, linkage
+from scipy.sparse import csr_matrix as ScipyCSRMatrix  # noqa: N812, TC002
 from scipy.spatial.distance import pdist, squareform
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.metrics import silhouette_samples
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.preprocessing import MinMaxScaler
+
+# Configure basic logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.feature_extraction.text")
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    module="sklearn.feature_extraction.text",
+)  # For get_feature_names_out
 
-# import spacy
-# from collections import defaultdict
 
-# # Load the spaCy model (make sure you have it downloaded)
-# # python -m spacy download en_core_web_sm
+# --- Pydantic Models ---
+
+
+class WordVectorCreationResult(BaseModel):
+    """Result of word vector creation using CountVectorizer."""
+
+    word_matrix_csr_scipy: Optional[ScipyCSRMatrix] = Field(
+        default=None,
+        description="Word-document matrix (CSR format). Scipy sparse matrix not directly serializable by Pydantic.",
+    )
+    words_vocabulary: list[str] = Field(default_factory=list, description="List of unique words in the vocabulary.")
+
+    class Config:
+        """Pydantic model configuration."""
+
+        arbitrary_types_allowed = True  # To allow scipy.sparse.csr_matrix
+
+
+class GraphMetrics(BaseModel):
+    """Basic metrics for a graph."""
+
+    nodes: int = Field(..., ge=0)
+    edges: int = Field(..., ge=0)
+    density: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+class GraphSimilarityOutput(BaseModel):
+    """Output of graph-based text similarity calculation."""
+
+    similarity_score: float = Field(..., ge=0.0, le=1.0)
+    subgraph_nodes: int = Field(..., ge=0)
+    subgraph_edges: int = Field(..., ge=0)
+    subgraph_density: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    message: Optional[str] = None
+
+
+class PlagiarismScore(BaseModel):
+    """Result of plagiarism detection score."""
+
+    overlap_percentage: float = Field(..., ge=0.0, le=1.0, description="Normalized plagiarism score (0-1).")
+
+
+class OverlapCoefficient(BaseModel):
+    """Overlap coefficient between two sets of tokens."""
+
+    coefficient: float = Field(..., ge=0.0, le=1.0)
+
+
+class SorensenDiceCoefficient(BaseModel):
+    """Sørensen-Dice coefficient between two sets of tokens."""
+
+    coefficient: float = Field(..., ge=0.0, le=1.0)
+
+
+class CharEqualityScore(BaseModel):
+    """Character-by-character equality score with decaying weights."""
+
+    score: float = Field(..., ge=0.0)  # Max score depends on string length
+
+
+class SemanticGraphSimilarity(BaseModel):
+    """Similarity score based on semantic graphs (spaCy based)."""
+
+    similarity: float = Field(..., ge=0.0, le=1.0)
+    nodes_jaccard: float = Field(..., ge=0.0, le=1.0)
+    edges_jaccard: float = Field(..., ge=0.0, le=1.0)
+
+
+class SmithWatermanParams(BaseModel):
+    """Parameter for the Smith-Waterman algorithm variant.
+
+    Attributes:
+        t1 (list[str]): First text as a list of tokens.
+        t2 (list[str]): Second text as a list of tokens.
+        sm (dict[str, dict[str, float]]): Scoring matrix for Smith-Waterman.
+        gap_penalty (float): Gap penalty for Smith-Waterman.
+        win1 (tuple[int, int]): Window boundaries for the first text.
+        win2 (tuple[int, int]): Window boundaries for the second text.
+
+    """
+
+    t1: list[str]
+    t2: list[str]
+    sm: dict[str, dict[str, float]]
+    gap_penalty: float
+    win1: tuple[int, int]
+    win2: tuple[int, int]
+
+
+class LexicalClusterFeature(BaseModel):
+    """Lexical and clustering features for a single student answer."""
+
+    # cosine_min: float # Commented out in original
+    # cosine_mean: float
+    # cosine_max: float
+    coph_min: float
+    coph_mean: float
+    coph_max: float
+    cluster_label: int
+    cluster_size: int
+    is_outlier: int = Field(..., ge=0, le=1)  # bool as int
+    silhouette: float
+    # index: int # This was student_idx, might not be needed in the feature set itself
+    # text: str # Original student text, might be too large for feature set
+
+
+class LexicalFeaturesAnalysis(BaseModel):
+    """List of lexical/clustering features for all student answers."""
+
+    student_features: list[LexicalClusterFeature]
+
+
+class SmithWatermanConfig(BaseModel):
+    """Configuration for the Smith-Waterman algorithm variant."""
+
+    k: int = Field(default=3, gt=0, description="The k-gram size for indexing.")
+    window_radius: int = Field(default=50, gt=0, description="Radius around k-gram matches to apply Smith-Waterman.")
+    match_score: float = Field(default=1.0, description="Score for matching tokens in Smith-Waterman.")
+    mismatch_score: float = Field(default=0.0, description="Score for mismatching tokens.")
+    gap_penalty: float = Field(default=-1.0, description="Penalty for gaps.")
+
+
+class FullTextAnalysisInput(BaseModel):
+    """Input for the comprehensive text analysis pipeline."""
+
+    model_answers: list[str]
+    student_texts: list[str]
+    # Parameters for various methods could be added here if they need to be configurable
+    plagiarism_k: int = Field(default=3, gt=0)
+    plagiarism_window_radius: int = Field(default=50, gt=0)
+    # Note: Smith-Waterman match_score, mismatch_score, gap_penalty will use defaults
+    # from SmithWatermanConfig unless explicitly added here and passed through.
+    lexical_linkage_method: str = Field(default="average")
+    lexical_distance_metric: str = Field(default="sqeuclidean")  # Note: sklearn pdist uses 'sqeuclidean'
+    lexical_cluster_dist_thresh: float = Field(default=0.5, gt=0)
+
+
+class FullTextAnalysisResult(BaseModel):
+    """Comprehensive results from analyzing student texts against model answers."""
+
+    corpus_graph_metrics: Optional[GraphMetrics] = None
+    student_lexical_features: Optional[LexicalFeaturesAnalysis] = None  # For all students
+    # Storing per-pair results in a list of dicts or a more structured list of models
+    per_student_analysis: list[dict[str, Any]] = Field(default_factory=list)
+    # Example of what might go into per_student_analysis dict for each student:
+    # {
+    #     "student_text_index": int,
+    #     "graph_similarity_to_model_avg": Optional[float],
+    #     "plagiarism_score_to_model_max": Optional[float],
+    #     "overlap_coefficient_to_model_avg": Optional[float],
+    #     "dice_coefficient_to_model_avg": Optional[float],
+    #     "char_equality_to_model_avg": Optional[float],
+    #     "semantic_graph_similarity_to_model_avg": Optional[float] # if spaCy part is active
+    # }
+
+
+# --- Rebuild Pydantic models to resolve forward references and complex types ---
+# This is particularly important for types like ScipyCSRMatrix with arbitrary_types_allowed.
+MODULE_MODELS = [
+    WordVectorCreationResult,
+    GraphMetrics,
+    GraphSimilarityOutput,
+    PlagiarismScore,
+    OverlapCoefficient,
+    SorensenDiceCoefficient,
+    CharEqualityScore,
+    SemanticGraphSimilarity,
+    LexicalClusterFeature,
+    LexicalFeaturesAnalysis,
+    SmithWatermanConfig,
+    FullTextAnalysisInput,
+    FullTextAnalysisResult,
+    SmithWatermanParams,
+]
+
+for model_cls in MODULE_MODELS:
+    model_cls.model_rebuild(force=True)
+
+
+# --- spaCy SRL (Semantic Role Labeling) Section - Commented Out as in Original ---
 # try:
+#     import spacy # Moved import here
 #     nlp = spacy.load("en_core_web_sm")
 # except OSError:
-#     print("Downloading 'en_core_web_sm' model...")
-#     spacy.cli.download("en_core_web_sm")
-#     nlp = spacy.load("en_core_web_sm")
+#     logger.info("Downloading 'en_core_web_sm' model for spaCy...")
+#     try:
+#         spacy.cli.download("en_core_web_sm")
+#         nlp = spacy.load("en_core_web_sm")
+#     except Exception as e_spacy_download:
+#         logger.error("Failed to download/load spaCy model: %s", e_spacy_download)
+#         nlp = None # Ensure nlp is defined
+# except ImportError:
+#     logger.info("spaCy library not installed. SRL features will be unavailable.")
+#     nlp = None
 
 
 # # Define two example sentences
@@ -39,10 +234,11 @@ warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.feature_
 # sentence4 = "The cat was chased by the dog." # Passive voice, different structure
 
 # # Process the sentences with spaCy
-# doc1 = nlp(sentence1)
-# doc2 = nlp(sentence2)
-# doc3 = nlp(sentence3)
-# doc4 = nlp(sentence4)
+# if nlp:
+#     doc1 = nlp(sentence1)
+#     doc2 = nlp(sentence2)
+#     doc3 = nlp(sentence3)
+#     doc4 = nlp(sentence4)
 
 
 # # Extract predicate-argument structures (improved version)
@@ -62,7 +258,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.feature_
 #                 # nsubj: nominal subject, dobj: direct object,
 #                 # nsubjpass: nominal subject (passive), auxpass: passive auxiliary (identifies passive)
 #                 # We could add more like 'pobj' for prepositional objects if needed.
-#                 if child.dep_ in ("nsubj", "dobj", "nsubjpass", "agent", "attr", "acomp", "xcomp"): # Added agent for passive, attr/acomp/xcomp for linking verbs/complements
+#                 if child.dep_ in ("nsubj", "dobj", "nsubjpass", "agent", "attr", "acomp", "xcomp"): # Added agent for passive, attr/acomp/xcomp for linking verbs/complements  # noqa: E501
 #                      # Store the dependency relation and the argument's lemma
 #                      arguments.append((child.dep_, child.lemma_))
 
@@ -116,7 +312,8 @@ warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.feature_
 #         if union_args > 0:
 #             similarity = intersection_args / union_args
 #         else:
-#             similarity = 1.0 if not args1_list and not args2_list else 0.0 # Both empty -> perfect match? Or 0? Let's say 1.
+#             # Both empty -> perfect match? Or 0? Let's say 1.
+#             similarity = 1.0 if not args1_list and not args2_list else 0.0
 
 #         # Option 2 (More nuanced): Score based on lemma matches, boosted by role match
 #         # similarity = 0
@@ -161,325 +358,331 @@ warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.feature_
 
 #     return normalized_score
 
+# if nlp:
+#     # Calculate SRL similarity between the sentences
+#     srl_sim_12 = srl_similarity_improved(doc1, doc2)
+#     srl_sim_34 = srl_similarity_improved(doc3, doc4)
+#     srl_sim_13 = srl_similarity_improved(doc1, doc3)
 
-# # Calculate SRL similarity between the sentences
-# srl_sim_12 = srl_similarity_improved(doc1, doc2)
-# srl_sim_34 = srl_similarity_improved(doc3, doc4)
-# srl_sim_13 = srl_similarity_improved(doc1, doc3)
+#     print(f"SRL Similarity (Sentence 1 vs 2): {srl_sim_12:.4f}")
+# Expect higher score due to lemma match + passive handling
+#     print(f"SRL Similarity (Sentence 3 vs 4): {srl_sim_34:.4f}")
+#     print(f"SRL Similarity (Sentence 1 vs 3): {srl_sim_13:.4f}") # Expect lower score
 
-# print(f"SRL Similarity (Sentence 1 vs 2): {srl_sim_12:.4f}")
-# print(f"SRL Similarity (Sentence 3 vs 4): {srl_sim_34:.4f}") # Expect higher score due to lemma match + passive handling
-# print(f"SRL Similarity (Sentence 1 vs 3): {srl_sim_13:.4f}") # Expect lower score
-
-# # Optional: Print extracted structures to debug
-# print("\nExtracted SRL for Sentence 1:", extract_predicate_arguments_improved(doc1))
-# print("Extracted SRL for Sentence 2:", extract_predicate_arguments_improved(doc2))
-# print("Extracted SRL for Sentence 3:", extract_predicate_arguments_improved(doc3))
-# print("Extracted SRL for Sentence 4:", extract_predicate_arguments_improved(doc4))
-
-s1 = "Education is the passport to the future, for tomorrow belongs to those who prepare for it today."
-s2 = "The future belongs to those who prepare for it today; education is their passport."
+#     # Optional: Print extracted structures to debug
+#     print("\nExtracted SRL for Sentence 1:", extract_predicate_arguments_improved(doc1))
+#     print("Extracted SRL for Sentence 2:", extract_predicate_arguments_improved(doc2))
+#     print("Extracted SRL for Sentence 3:", extract_predicate_arguments_improved(doc3))
+#     print("Extracted SRL for Sentence 4:", extract_predicate_arguments_improved(doc4))
 
 
-# Improved tokenization
-def simple_tokenize(text):
-    if not isinstance(text, str):  # Handle potential non-string input
+def simple_tokenize(text: str) -> list[str]:
+    """Lowercase, remove punctuation, and split text into tokens."""
+    if not isinstance(text, str):
+        logger.warning("simple_tokenize received non-string input: %s. Returning empty list.", type(text))
         return []
-    text = text.lower()  # Lowercase
-    text = re.sub(r"[^\w\s]", "", text)  # Remove punctuation
-    # Remove empty strings that might result from multiple spaces
-    return [token for token in text.split() if token]
+    text_lower = text.lower()
+    text_no_punct = re.sub(r"[^\w\s]", "", text_lower)
+    return [token for token in text_no_punct.split() if token]
 
 
-# Step 1: Create word vectors (using improved tokenizer)
-def create_word_vectors(texts):
+def create_word_vectors(texts: list[str]) -> WordVectorCreationResult:
+    """Create word-document matrix using CountVectorizer.
+
+    Args:
+        texts: A list of text strings.
+
+    Returns:
+        WordVectorCreationResult containing the sparse matrix and vocabulary words.
+
+    """
     # Use the tokenizer in CountVectorizer
-    vectorizer = CountVectorizer(tokenizer=simple_tokenize)
-    # Ensure texts are valid strings
-    valid_texts = [t for t in texts if isinstance(t, str)]
+    vectorizer = CountVectorizer(
+        tokenizer=simple_tokenize,
+        token_pattern=None,  # token_pattern=None when tokenizer is provided
+    )
+    valid_texts = [t for t in texts if isinstance(t, str) and t.strip()]
     if not valid_texts:
-        # Handle case where no valid texts are provided
-        return None, []
-    word_matrix = vectorizer.fit_transform(valid_texts)
-    words = vectorizer.get_feature_names_out()
-    return word_matrix, words
+        logger.warning("create_word_vectors: No valid texts provided. Returning empty result.")
+        return WordVectorCreationResult()
+
+    try:
+        word_matrix: ScipyCSRMatrix = vectorizer.fit_transform(valid_texts)
+        words: list[str] = vectorizer.get_feature_names_out().tolist()  # Convert numpy array to list
+        return WordVectorCreationResult(word_matrix_csr_scipy=word_matrix, words_vocabulary=words)
+    except Exception:  # Catching generic Exception
+        logger.exception("Error in create_word_vectors:")  # Log the actual exception e
+        return WordVectorCreationResult()  # Return empty on error
 
 
-# Step 2: Build graph efficiently
-def build_graph_efficiently(word_matrix, words):
-    if word_matrix is None or len(words) == 0:
-        return nx.Graph()  # Return empty graph if no data
+def build_graph_efficiently(word_matrix_result: WordVectorCreationResult) -> nx.Graph:
+    """Build a word co-occurrence graph based on cosine similarity of word vectors.
+
+    Args:
+        word_matrix_result: Output from create_word_vectors.
+
+    Returns:
+        A networkx.Graph where nodes are words and edges are weighted by similarity.
+
+    """
+    if word_matrix_result.word_matrix_csr_scipy is None or not word_matrix_result.words_vocabulary:
+        logger.warning("build_graph_efficiently: word_matrix or words vocabulary is empty. Returning empty graph.")
+        return nx.Graph()
+
+    word_matrix = word_matrix_result.word_matrix_csr_scipy
+    words = word_matrix_result.words_vocabulary
 
     start_time = time.time()
-    print(f"Building graph for {len(words)} words...")
+    logger.info(f"Building graph for {len(words)} words...")
 
-    # Need word vectors (columns as rows)
-    # Making dense for cosine_similarity. BEWARE of memory for large vocab/docs.
-    word_vectors = word_matrix.T.toarray()
+    # Word vectors (columns of word_matrix are word vectors)
+    # Convert to dense array for cosine_similarity. Be cautious with very large vocabularies.
+    try:
+        # word_matrix is ScipyCSRMatrix, .T is ScipyCSCMatrix, both have .toarray()
+        word_vectors: np.ndarray = word_matrix.T.toarray()
+    except MemoryError:
+        logger.exception(
+            "MemoryError converting sparse matrix to dense for graph building. Vocab size: %s.",
+            len(words),
+        )
+        # Potentially fallback to an approximate method or raise
+        raise
 
-    # Calculate pairwise cosine similarity between word vectors
-    similarity_matrix = cosine_similarity(word_vectors)  # Shape (num_words, num_words)
-    print(f"  Similarity matrix calculation took {time.time() - start_time:.2f}s")
+    if word_vectors.shape[0] == 0:  # No words means no vectors
+        logger.warning("Word vectors are empty. Returning empty graph.")
+        return nx.Graph()
+
+    similarity_matrix = cosine_similarity(word_vectors)
+    logger.debug(f"  Similarity matrix calculation took {time.time() - start_time:.2f}s")
 
     graph_build_start = time.time()
     num_words = len(words)
     graph = nx.Graph()
-    graph.add_nodes_from(words)  # Add all words as nodes
+    graph.add_nodes_from(words)
 
-    # Use a threshold slightly above zero to avoid tiny similarities
-    similarity_threshold = 0.01
-    edges_added = 0
+    similarity_threshold = 0.01  # Connect words with at least this similarity
+    edges_added_count = 0
 
-    # Iterate through the upper triangle of the similarity matrix
+    # Iterate efficiently through the upper triangle of the similarity matrix
     for i in range(num_words):
         for j in range(i + 1, num_words):
             similarity = similarity_matrix[i, j]
             if similarity > similarity_threshold:
                 graph.add_edge(words[i], words[j], weight=similarity)
-                edges_added += 1
+                edges_added_count += 1
 
-    print(f"  Graph construction (adding {edges_added} edges) took {time.time() - graph_build_start:.2f}s")
-    print(f"Graph building finished. Total time: {time.time() - start_time:.2f}s")
+    logger.debug(f"  Graph construction (added {edges_added_count} edges) took {time.time() - graph_build_start:.2f}s")
+    logger.info(
+        f"Graph building finished. Total time: {time.time() - start_time:.2f}s. "
+        f"Nodes: {graph.number_of_nodes()}, Edges: {graph.number_of_edges()}",
+    )
     return graph
 
 
-# Step 3: Calculate graph similarity using subgraph density
-def calculate_graph_similarity(graph, text1, text2):
+def calculate_graph_similarity(graph: nx.Graph, text1: str, text2: str) -> GraphSimilarityOutput:
+    """Calculate similarity between two texts based on the density of their common words' subgraph.
+
+    Args:
+        graph: The global word co-occurrence graph.
+        text1: The first text string.
+        text2: The second text string.
+
+    Returns:
+        GraphSimilarityOutput containing the similarity score and subgraph metrics.
+
+    """
     words1 = set(simple_tokenize(text1))
     words2 = set(simple_tokenize(text2))
 
-    # Find common words that are actually *in the graph* (part of the initial corpus vocab)
-    common_words_in_graph = words1.intersection(words2).intersection(graph.nodes)
+    common_words_in_graph = list(words1.intersection(words2).intersection(graph.nodes))
 
     if not common_words_in_graph:
-        print("No common words found in the graph.")
-        return 0.0
-
-    # Important: Create subgraph only from nodes present in the main graph
-    subgraph = graph.subgraph(common_words_in_graph)
-
-    # Density calculation needs at least 2 nodes for potential edges
-    if subgraph.number_of_nodes() < 2:
-        print(f"Subgraph has < 2 nodes ({subgraph.number_of_nodes()}), density is undefined or 0.")
-        # Density is often considered 0 for single nodes or empty graphs.
-        # Check nx.density documentation for specific behavior if needed.
-        return 0.0  # Or handle as appropriate
-
-    try:
-        graph_sim = nx.density(subgraph)
-        print(
-            f"Subgraph Nodes: {subgraph.number_of_nodes()}, Edges: {subgraph.number_of_edges()}"
-            f", Density: {graph_sim:.4f}",
+        logger.debug("No common words found in the graph for the given texts.")
+        return GraphSimilarityOutput(
+            similarity_score=0.0,
+            subgraph_nodes=0,
+            subgraph_edges=0,
+            message="No common words in graph.",
         )
-    except ZeroDivisionError:
-        # This might happen if number_of_nodes is < 2, though checked above
-        print("  Density calculation failed (ZeroDivisionError).")
-        graph_sim = 0.0
 
-    return graph_sim
+    # Create subgraph from common words that are present in the main graph
+    subgraph = graph.subgraph(common_words_in_graph)
+    sub_nodes = subgraph.number_of_nodes()
+    sub_edges = subgraph.number_of_edges()
 
+    # Density is typically defined for graphs with at least 2 nodes.
+    # nx.density handles graphs with 0 or 1 node (returns 0 or NaN that we can catch).
+    graph_sim_score = 0.0
+    sub_density = None
+    message = None
+    min_sub_nodes = 2  # Minimum nodes for density calculation
+    if sub_nodes < min_sub_nodes:  # Density undefined or 0 for graphs with < 2 nodes
+        message = f"Subgraph has < 2 nodes ({sub_nodes}), density considered 0."
+        # graph_sim_score remains 0.0
+    else:
+        try:
+            sub_density = nx.density(subgraph)
+            if np.isnan(sub_density):  # nx.density can return NaN for isolated nodes
+                logger.debug("Subgraph density is NaN (likely isolated nodes), treating as 0.")
+                sub_density = 0.0
+            graph_sim_score = sub_density  # Use density as the similarity score
+            message = f"Subgraph: {sub_nodes} nodes, {sub_edges} edges."
+        except ZeroDivisionError:  # Should be caught by sub_nodes < 2, but as a safeguard
+            message = "Density calculation failed (ZeroDivisionError)."
+            # graph_sim_score remains 0.0
 
-# --- Example Usage ---
-# Use a slightly larger corpus to build a more meaningful (but still limited) graph
-corpus = [
-    "The quick brown fox jumps over the lazy dog",
-    "A quick brown dog jumps over a lazy fox",
-    "The dog barks loudly at the fox",
-    "Brown foxes are quick animals",
-    "Never jump over the lazy dog quickly",
-]
-
-print("Step 1: Creating word vectors...")
-word_matrix, words = create_word_vectors(corpus)
-
-print("\nStep 2: Building graph...")
-if word_matrix is not None:
-    graph = build_graph_efficiently(word_matrix, words)
-else:
-    print("Could not create word matrix. Exiting.")
-    sys.exit()
-
-print(f"\nGraph nodes: {graph.number_of_nodes()}, Graph edges: {graph.number_of_edges()}")
-
-
-print("\nStep 3: Calculating similarity...")
-text1 = "The quick brown fox jumps over the lazy dog"
-text2 = "A quick brown dog jumps over a lazy fox"
-print(f"\nComparing:\n Text 1: '{text1}'\n Text 2: '{text2}'")
-graph_similarity12 = calculate_graph_similarity(graph, text1, text2)
-print(f"Graph Similarity (1 vs 2): {graph_similarity12:.4f}")
-
-text3 = "the lazy fox barks at the dog"
-print(f"\nComparing:\n Text 1: '{text1}'\n Text 3: '{text3}'")
-graph_similarity13 = calculate_graph_similarity(graph, text1, text3)
-print(f"Graph Similarity (1 vs 3): {graph_similarity13:.4f}")
-
-text4 = "a slow red turtle"  # No common words in graph
-print(f"\nComparing:\n Text 1: '{text1}'\n Text 4: '{text4}'")
-graph_similarity14 = calculate_graph_similarity(graph, text1, text4)
-print(f"Graph Similarity (1 vs 4): {graph_similarity14:.4f}")
+    logger.debug(f"Graph similarity: score={graph_sim_score:.4f}, {message}")
+    return GraphSimilarityOutput(
+        similarity_score=graph_sim_score,
+        subgraph_nodes=sub_nodes,
+        subgraph_edges=sub_edges,
+        subgraph_density=sub_density,
+        message=message,
+    )
 
 
-def preprocess(text: str, lowercase: bool = True, remove_punct: bool = True) -> List[str]:
+# --- Smith-Waterman and Other Similarity Functions ---
+
+
+def preprocess_sw(text: str, *, lowercase: bool = True, remove_punct: bool = True) -> list[str]:
+    """Preprocess text for Smith-Waterman: lowercase, remove punctuation, split."""
+    if not isinstance(text, str):
+        return []
+    processed_text = text
     if lowercase:
-        text = text.lower()
+        processed_text = processed_text.lower()
     if remove_punct:
-        text = re.sub(r"[^\w\s]", " ", text)
-    return text.split()
+        processed_text = re.sub(r"[^\w\s]", " ", processed_text)  # Replace with space to handle word boundaries
+    return [token for token in processed_text.split() if token]  # Filter empty strings
 
 
-def build_ngram_index(tokens: List[str], k: int) -> Dict[Tuple[str, ...], List[int]]:
-    """Map each k-gram to the list of start positions where it occurs."""
-    index = defaultdict(list)
+def build_ngram_index(tokens: list[str], k: int) -> dict[tuple[str, ...], list[int]]:
+    """Map each k-gram in tokens to a list of its starting positions."""
+    index: dict[tuple[str, ...], list[int]] = defaultdict(list)
+    if k <= 0 or not tokens or len(tokens) < k:
+        return dict(index)
     for i in range(len(tokens) - k + 1):
         key = tuple(tokens[i : i + k])
         index[key].append(i)
-    return index
+    return dict(index)
 
 
-def smith_waterman_window(
-    t1: List[str],
-    t2: List[str],
-    sm: Dict[str, Dict[str, float]],
-    gap_penalty: float,
-    win1: Tuple[int, int],
-    win2: Tuple[int, int],
-) -> float:
-    """Run SW on t1[w1[0]:w1[1]] vs t2[w2[0]:w2[1]] and return max score."""
-    a1 = t1[win1[0] : win1[1]]
-    a2 = t2[win2[0] : win2[1]]
+def smith_waterman_window(params: SmithWatermanParams) -> float:
+    """Run Smith-Waterman on specified windows of t1 and t2, return max score in H matrix."""
+    t1, t2, sm, gap_penalty, win1, win2 = params.t1, params.t2, params.sm, params.gap_penalty, params.win1, params.win2
+
+    a1, a2 = t1[win1[0] : win1[1]], t2[win2[0] : win2[1]]
     n, m = len(a1), len(a2)
-    h_zeroes = np.zeros((n + 1, m + 1))
-    best = 0.0
+    if n == 0 or m == 0:
+        return 0.0
+
+    h_matrix = np.zeros((n + 1, m + 1), dtype=float)  # H matrix
+    max_score_in_window = 0.0
+
     for i in range(1, n + 1):
         for j in range(1, m + 1):
-            sc = sm[a1[i - 1]][a2[j - 1]]
-            h_zeroes[i, j] = max(
-                0,
-                h_zeroes[i - 1, j - 1] + sc,
-                h_zeroes[i - 1, j] + gap_penalty,
-                h_zeroes[i, j - 1] + gap_penalty,
-            )
-            best = max(best, h_zeroes[i, j])
-    return best
+            # Default to mismatch_score if words not in sm (should not happen if sm is built from unique words)
+            match_val = sm.get(a1[i - 1], {}).get(a2[j - 1], -1.0)  # Assuming -1 for unknown mismatch
+
+            score_diag = h_matrix[i - 1, j - 1] + match_val
+            score_up = h_matrix[i - 1, j] + gap_penalty
+            score_left = h_matrix[i, j - 1] + gap_penalty
+
+            h_matrix[i, j] = max(0, score_diag, score_up, score_left)
+            max_score_in_window = max(max_score_in_window, h_matrix[i, j])
+    return max_score_in_window
 
 
 def compute_plagiarism_score_fast(
     text1: str,
     text2: str,
-    k: int = 3,
-    window_radius: int = 50,
-    match_score: float = 1.0,
-    mismatch_score: float = 0.0,
-    gap_penalty: float = -1.0,
-) -> float:
-    # 1. Preprocess & tokenize
-    t1 = preprocess(text1)
-    t2 = preprocess(text2)
-
-    # 2. Build scoring matrix once
-    uniq = set(t1) | set(t2)
-    sm = {w: {v: (match_score if w == v else mismatch_score) for v in uniq} for w in uniq}
-
-    # 3. Build k-gram index on text2
-    idx2 = build_ngram_index(t2, k)
-
-    # 4. For each k-gram in text1 that appears in text2, extend around it
-    best_score = 0.0
-    for i in range(len(t1) - k + 1):
-        gram = tuple(t1[i : i + k])
-        for j in idx2.get(gram, []):
-            # define window bounds, clipped to sequence ends
-            w1_start = max(0, i - window_radius)
-            w1_end = min(len(t1), i + k + window_radius)
-            w2_start = max(0, j - window_radius)
-            w2_end = min(len(t2), j + k + window_radius)
-
-            score = smith_waterman_window(
-                t1,
-                t2,
-                sm,
-                gap_penalty,
-                (w1_start, w1_end),
-                (w2_start, w2_end),
-            )
-            best_score = max(best_score, score)
-
-    # 5. Normalize by the smaller token count
-    denom = min(len(t1), len(t2)) or 1
-    return best_score / denom
-
-
-pct = compute_plagiarism_score_fast(s1, s2)
-print(f"Fast plagiarism overlap: {pct:.2%}")
-
-
-# Step 1: Tokenize the texts
-def tokenize_text(text):
-    tokens = text.lower().split()  # Split the text into lowercase tokens
-    return set(tokens)
-
-
-# Step 2: Calculate overlap coefficient
-def calculate_overlap_coefficient(text1, text2):
-    set1 = tokenize_text(text1)
-    set2 = tokenize_text(text2)
-    intersection = len(set1.intersection(set2))
-    min_size = min(len(set1), len(set2))
-    return intersection / min_size if min_size > 0 else 0.0
-
-
-# Example usage
-overlap_coefficient = calculate_overlap_coefficient(s1, s2)
-
-print("Overlap Coefficient:", overlap_coefficient)
-
-
-# Step 1: Tokenize the texts
-def tokenize_text(text):
-    tokens = text.lower().split()  # Split the text into lowercase tokens
-    return set(tokens)
-
-
-# Step 2: Calculate Sørensen-Dice coefficient
-def calculate_sorensen_dice_coefficient(text1, text2):
-    set1 = tokenize_text(text1)
-    set2 = tokenize_text(text2)
-
-    intersection = len(set1 & set2)
-    total_tokens = len(set1) + len(set2)
-
-    return ((2 * intersection) / total_tokens) if total_tokens > 0 else 0.0
-
-
-dice_coefficient = calculate_sorensen_dice_coefficient(s1, s2)
-
-print("Sørensen-Dice Coefficient:", dice_coefficient)
-
-
-def get_char_by_char_equality_optimized(s1: Optional[str], s2: Optional[str]) -> float:
-    """Compare two strings character by character with geometrically decaying weights, optimized for speed.
+    config: SmithWatermanConfig,
+) -> PlagiarismScore:
+    """Compute a plagiarism score using a fast Smith-Waterman variant with k-gram indexing.
 
     Args:
-        s1 (Optional[str]): The first string to compare.
-        s2 (Optional[str]): The second string to compare.
+        text1: The first text string.
+        text2: The second text string.
+        config: Configuration for the Smith-Waterman algorithm.
 
     Returns:
-        float: A similarity score between 0.0 and 1.0 based on character matches.
-               Higher scores indicate greater similarity.
-
-    Notes:
-        - Handles None inputs by returning 0.0.
-        - Comparison stops at the end of the shorter string.
-        - Matches at the beginning contribute more (weights: 1.0, 0.5, 0.25, ...).
+        PlagiarismScore model with the normalized overlap percentage.
 
     """
-    if s1 is None or s2 is None:
-        return 0.0
+    t1_tokens = preprocess_sw(text1)
+    t2_tokens = preprocess_sw(text2)
 
-    s1 = str(s1)
-    s2 = str(s2)
+    if not t1_tokens or not t2_tokens:
+        return PlagiarismScore(overlap_percentage=0.0)
 
+    # Build scoring matrix (sm) for Smith-Waterman
+    unique_words = set(t1_tokens) | set(t2_tokens)
+    scoring_matrix = {
+        w1: {w2: (config.match_score if w1 == w2 else config.mismatch_score) for w2 in unique_words}
+        for w1 in unique_words
+    }
+
+    # Build k-gram index on the (presumably longer) text for efficiency, let's say text2
+    index_t2 = build_ngram_index(t2_tokens, config.k)
+    max_overall_sw_score = 0.0
+
+    for i in range(len(t1_tokens) - config.k + 1):
+        current_kgram = tuple(t1_tokens[i : i + config.k])
+        if current_kgram in index_t2:
+            for j_start_pos_t2 in index_t2[current_kgram]:
+                # Define windows for Smith-Waterman application
+                w1_start = max(0, i - config.window_radius)
+                w1_end = min(len(t1_tokens), i + config.k + config.window_radius)
+                w2_start = max(0, j_start_pos_t2 - config.window_radius)
+                w2_end = min(len(t2_tokens), j_start_pos_t2 + config.k + config.window_radius)
+                smith_waterman_params = SmithWatermanParams(
+                    t1=t1_tokens,
+                    t2=t2_tokens,
+                    sm=scoring_matrix,
+                    gap_penalty=config.gap_penalty,
+                    win1=(w1_start, w1_end),
+                    win2=(w2_start, w2_end),
+                )
+                window_score = smith_waterman_window(smith_waterman_params)
+                max_overall_sw_score = max(max_overall_sw_score, window_score)
+
+    # Normalize the highest Smith-Waterman score found
+    # Denominator could be length of shorter text, or length of text1, or max possible score
+    # Using length of shorter text in tokens
+    denominator = min(len(t1_tokens), len(t2_tokens))
+    normalized_score = (max_overall_sw_score / denominator) if denominator > 0 else 0.0
+    # Ensure score is between 0 and 1 (it might exceed 1 if match_score > 1 and many matches)
+    normalized_score = min(max(normalized_score, 0.0), 1.0)
+
+    return PlagiarismScore(overlap_percentage=normalized_score)
+
+
+def calculate_overlap_coefficient(text1: str, text2: str) -> OverlapCoefficient:
+    """Calculate the overlap coefficient between two texts."""
+    set1 = set(simple_tokenize(text1))  # Using simple_tokenize for consistency
+    set2 = set(simple_tokenize(text2))
+    intersection_len = len(set1.intersection(set2))
+    min_len = min(len(set1), len(set2))
+    coefficient = (intersection_len / min_len) if min_len > 0 else 0.0
+    return OverlapCoefficient(coefficient=coefficient)
+
+
+def calculate_sorensen_dice_coefficient(text1: str, text2: str) -> SorensenDiceCoefficient:
+    """Calculate the Sørensen-Dice coefficient between two texts."""
+    set1 = set(simple_tokenize(text1))
+    set2 = set(simple_tokenize(text2))
+    intersection_len = len(set1.intersection(set2))
+    total_tokens_sum = len(set1) + len(set2)
+    coefficient = (2 * intersection_len / total_tokens_sum) if total_tokens_sum > 0 else 0.0
+    return SorensenDiceCoefficient(coefficient=coefficient)
+
+
+def get_char_by_char_equality_optimized(s1_in: Optional[str], s2_in: Optional[str]) -> CharEqualityScore:
+    """Compare two strings character by character with geometrically decaying weights."""
+    if s1_in is None or s2_in is None:
+        return CharEqualityScore(score=0.0)
+
+    s1, s2 = str(s1_in), str(s2_in)  # Ensure strings
     min_len = min(len(s1), len(s2))
     total_score = 0.0
     current_weight = 1.0
@@ -487,184 +690,455 @@ def get_char_by_char_equality_optimized(s1: Optional[str], s2: Optional[str]) ->
     for i in range(min_len):
         if s1[i] == s2[i]:
             total_score += current_weight
-        current_weight *= 0.5
-
-    return total_score
-
-
-print("Character by character equality score:", get_char_by_char_equality_optimized(s1, s2))
+        current_weight *= 0.5  # Geometric decay
+    return CharEqualityScore(score=total_score)
 
 
-# Load the spaCy model
-nlp = spacy.load("en_core_web_sm")
-
-
-# Step 1: Create semantic graph for text
-def create_semantic_graph(text):
-    doc = nlp(text)
+def create_semantic_graph_spacy(text: str, spacy_nlp_model: Any) -> Optional[nx.Graph]:  # noqa: ANN401
+    """Create a semantic graph from text using spaCy dependencies."""
+    if spacy_nlp_model is None:
+        logger.warning("spaCy model not loaded, cannot create semantic graph.")
+        return None
+    doc = spacy_nlp_model(text)
     graph = nx.Graph()
     for token in doc:
-        # Add nodes for tokens
         graph.add_node(token.i, text=token.text, lemma=token.lemma_, pos=token.pos_)
-        # Add edges between tokens and their dependencies
         for child in token.children:
             graph.add_edge(token.i, child.i, label=child.dep_)
     return graph
 
 
-# Step 2: Calculate similarity between semantic graphs
-def calculate_graph_similarity(graph1, graph2):
-    # Extract sets of nodes and edges from the graphs
-    nodes1 = set(graph1.nodes)
-    nodes2 = set(graph2.nodes)
-    edges1 = set(graph1.edges)
-    edges2 = set(graph2.edges)
-    # Calculate Jaccard similarity coefficient
-    jaccard_similarity_nodes = len(nodes1.intersection(nodes2)) / len(nodes1.union(nodes2))
-    jaccard_similarity_edges = len(edges1.intersection(edges2)) / len(edges1.union(edges2))
-    # Combine node and edge similarities using a weighted sum or another method
-    # Here, we'll use a simple average
-    return (jaccard_similarity_nodes + jaccard_similarity_edges) / 2
+def calculate_semantic_graph_similarity_spacy(
+    graph1: Optional[nx.Graph],
+    graph2: Optional[nx.Graph],
+) -> SemanticGraphSimilarity:
+    """Calculate similarity between two semantic graphs based on Jaccard index of nodes and edges."""
+    if graph1 is None or graph2 is None or graph1.number_of_nodes() == 0 or graph2.number_of_nodes() == 0:
+        return SemanticGraphSimilarity(similarity=0.0, nodes_jaccard=0.0, edges_jaccard=0.0)
 
+    nodes1, nodes2 = set(graph1.nodes), set(graph2.nodes)
+    edges1, edges2 = set(graph1.edges), set(graph2.edges)
 
-# Example usage
+    union_nodes_len = len(nodes1.union(nodes2))
+    nodes_jaccard = len(nodes1.intersection(nodes2)) / union_nodes_len if union_nodes_len > 0 else 0.0
 
-# Step 1: Create semantic graphs for both texts
-graph1 = create_semantic_graph(s1)
-graph2 = create_semantic_graph(s2)
+    union_edges_len = len(edges1.union(edges2))
+    edges_jaccard = len(edges1.intersection(edges2)) / union_edges_len if union_edges_len > 0 else 0.0
 
-# Step 2: Calculate similarity between semantic graphs
-graph_similarity = calculate_graph_similarity(graph1, graph2)
-
-print("Graph Similarity:", graph_similarity)
+    # Combine node and edge similarities (simple average here)
+    overall_similarity = (nodes_jaccard + edges_jaccard) / 2.0
+    return SemanticGraphSimilarity(
+        similarity=overall_similarity,
+        nodes_jaccard=nodes_jaccard,
+        edges_jaccard=edges_jaccard,
+    )
 
 
 # --- Lexical/Clustering Features ---
 
 
-def preprocess_tfidf(text: str, lowercase: bool = True, remove_punct: bool = True) -> str:
+def preprocess_tfidf(text: str, *, lowercase: bool = True, remove_punct: bool = True) -> str:
+    """Prepare text for TF-IDF: lowercase, remove punctuation."""
+    if not isinstance(text, str):
+        return ""
+    processed_text = text
     if lowercase:
-        text = text.lower()
+        processed_text = processed_text.lower()
     if remove_punct:
-        text = re.sub(r"[^\w\s]", " ", text)
-    return text
+        processed_text = re.sub(r"[^\w\s]", " ", processed_text)  # Replace punct with space
+    return processed_text.strip()  # Remove leading/trailing spaces
 
 
 def extract_lexical_features(
-    model_answers: List[str],
-    student_answers: List[str],
+    model_answers: list[str],
+    student_answers: list[str],
     linkage_method: str = "average",
     distance_metric: str = "sqeuclidean",
     cluster_dist_thresh: float = 0.5,
-) -> Dict[str, float]:
-    # 1. Build the *global* corpus
-    all_texts = [preprocess_tfidf(t) for t in model_answers + student_answers]
-    n_models = len(model_answers)
-    n_total = len(all_texts)
+) -> LexicalFeaturesAnalysis:
+    """Extract lexical and clustering-based features for student answers relative to model answers.
 
-    # 2. TF-IDF encode once
-    vec = TfidfVectorizer()
-    X = vec.fit_transform(all_texts).toarray()
+    Args:
+        model_answers: List of model/reference answer strings.
+        student_answers: List of student answer strings.
+        linkage_method: Linkage method for hierarchical clustering.
+        distance_metric: Distance metric for pdist and silhouette_samples.
+        cluster_dist_thresh: Distance threshold for forming flat clusters.
 
-    # 3. Pairwise cosine similarity and cophenetic
-    D = pdist(X, metric=distance_metric)
-    # distm = squareform(D)
-    # simm = 1.0 - distm
+    Returns:
+        LexicalFeaturesAnalysis model containing a list of features for each student.
 
-    # 4. One linkage on entire set
-    link = linkage(D, method=linkage_method)
-    _, coph = cophenet(link, D)
-    cophm = squareform(coph)
+    """
+    if not model_answers or not student_answers:
+        logger.warning("extract_lexical_features: model_answers or student_answers is empty.")
+        return LexicalFeaturesAnalysis(student_features=[])
 
-    # 5. One distance-threshold clustering
-    labels = fcluster(link, t=cluster_dist_thresh, criterion="distance")
-    # 6. One global silhouette (requires >1 cluster)
-    sil = silhouette_samples(X, labels, metric=distance_metric) if len(np.unique(labels)) > 1 else np.zeros(n_total)
+    all_texts_processed = [preprocess_tfidf(t) for t in model_answers + student_answers]
+    num_models = len(model_answers)
+    num_total_texts = len(all_texts_processed)
 
-    features = []
-    # Now extract per-student from start from n_models index till n_total global index which is students clusers
+    # TF-IDF Vectorization
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix: np.ndarray
+    try:
+        # Ensure there's content to vectorize
+        if not any(all_texts_processed):
+            logger.warning("All texts are empty after preprocessing in extract_lexical_features.")
+            return LexicalFeaturesAnalysis(student_features=[])
+
+        tfidf_matrix = vectorizer.fit_transform(all_texts_processed).toarray()
+    except ValueError:  # Catch "empty vocabulary" errors
+        logger.exception(
+            "TF-IDF Vectorization error in extract_lexical_features: %s. "
+            "This can happen if all texts are empty or contain only stopwords after preprocessing.",
+        )
+        # Return empty features if TF-IDF fails critically
+        return LexicalFeaturesAnalysis(student_features=[])
+
+    # Pairwise distances for clustering and cophenetic distance
+    # pdist requires at least 2 samples if X is 1D, or 2 features if X is NxD (N>1)
+    min_matrix_size = 2
+    if tfidf_matrix.shape[0] < min_matrix_size or tfidf_matrix.shape[1] == 0:
+        logger.warning(f"Not enough samples or features for pdist. Matrix shape: {tfidf_matrix.shape}")
+        # Create default features for each student indicating an issue
+        error_feature = LexicalClusterFeature(
+            coph_min=0.0,
+            coph_mean=0.0,
+            coph_max=0.0,
+            cluster_label=-1,
+            cluster_size=0,
+            is_outlier=1,
+            silhouette=0.0,
+        )
+        return LexicalFeaturesAnalysis(student_features=[error_feature for _ in student_answers])
+
+    pairwise_dist_matrix_condensed: np.ndarray = pdist(
+        tfidf_matrix,
+        metric=distance_metric,  # type: ignore[arg-type] # Pylance stub issue for scipy pdist metric
+    )
+
+    # Hierarchical Clustering
+    linkage_matrix: np.ndarray
+    try:
+        linkage_matrix = linkage(pairwise_dist_matrix_condensed, method=linkage_method)
+    except ValueError:  # linkage needs more than 1 observation
+        logger.exception(
+            "Linkage error in extract_lexical_features. Matrix shape: %s.",
+            tfidf_matrix.shape,
+        )
+        error_feature = LexicalClusterFeature(
+            coph_min=0.0,
+            coph_mean=0.0,
+            coph_max=0.0,
+            cluster_label=-1,
+            cluster_size=0,
+            is_outlier=1,
+            silhouette=0.0,
+        )
+        return LexicalFeaturesAnalysis(student_features=[error_feature for _ in student_answers])
+
+    cophenetic_coeffs: np.ndarray
+    _, cophenetic_coeffs = cophenet(linkage_matrix, pairwise_dist_matrix_condensed)
+    cophenetic_dist_matrix_square: np.ndarray = squareform(cophenetic_coeffs)
+
+    # Flat Clustering and Silhouette Scores
+    cluster_labels: np.ndarray = fcluster(linkage_matrix, t=cluster_dist_thresh, criterion="distance")
+
+    silhouette_vals: np.ndarray
+    num_unique_labels = len(np.unique(cluster_labels))
+    if (
+        num_unique_labels > 1 and num_unique_labels < num_total_texts
+    ):  # silhouette_samples needs 1 < n_labels < n_samples
+        silhouette_vals = silhouette_samples(tfidf_matrix, cluster_labels, metric=distance_metric)
+    else:  # Not enough distinct clusters or all samples in one cluster
+        silhouette_vals = np.zeros(num_total_texts)
+
+    student_feature_list: list[LexicalClusterFeature] = []
     for idx, _ in enumerate(student_answers):
-        student_idx = n_models + idx
-        # cosine to each model
-        # sims_to_models = simm[student_idx, :n_models]
-        # cophenetic to each model
-        cops_to_models = cophm[student_idx, :n_models]
+        student_global_idx = num_models + idx  # Index in the combined tfidf_matrix
 
-        lbl = labels[student_idx]
-        size = int((labels == lbl).sum())
+        # Cophenetic distances from this student to all model answers
+        student_coph_to_models: np.ndarray = cophenetic_dist_matrix_square[student_global_idx, :num_models]
 
-        feats = {
-            # "cosine_min": float(sims_to_models.min()),
-            # "cosine_mean": float(sims_to_models.mean()),
-            # "cosine_max": float(sims_to_models.max()),
-            "coph_min": float(cops_to_models.min()),
-            "coph_mean": float(cops_to_models.mean()),
-            "coph_max": float(cops_to_models.max()),
-            "cluster_label": lbl,
-            "cluster_size": size,
-            "is_outlier": int(size == 1),
-            "silhouette": float(sil[student_idx]),
-            "index": student_idx,
-            # "text": student_text,
-        }
-        features.append(feats)
+        student_cluster_label_val: int = cluster_labels[student_global_idx].item()  # Use .item() for scalar
+        student_cluster_size_val: int = int((cluster_labels == student_cluster_label_val).sum())
 
-    return features
+        features_for_student = LexicalClusterFeature(
+            coph_min=float(student_coph_to_models.min()) if student_coph_to_models.size > 0 else 0.0,
+            coph_mean=float(student_coph_to_models.mean()) if student_coph_to_models.size > 0 else 0.0,
+            coph_max=float(student_coph_to_models.max()) if student_coph_to_models.size > 0 else 0.0,
+            cluster_label=student_cluster_label_val,
+            cluster_size=student_cluster_size_val,
+            is_outlier=int(student_cluster_size_val == 1),
+            silhouette=float(silhouette_vals[student_global_idx].item()),  # Use .item() for scalar
+        )
+        student_feature_list.append(features_for_student)
+
+    return LexicalFeaturesAnalysis(student_features=student_feature_list)
 
 
-# --- Combine, Normalize, Train ---
+# --- Main Analysis Orchestration Function ---
+# This function will combine calls to the above methods.
 
 
-def build_feature_matrix(model_answers: List[str], student_texts: List[str]) -> np.ndarray:
-    """Return raw feature matrix of shape (n_students, n_features)."""
-    # 1) Compute batch lexical features for all students at once
-    return extract_lexical_features(model_answers, student_texts)
-    # 2) Compute Smith  Waterman overlap per student
-    # sw_feats = [max(compute_plagiarism_score(text, m) for m in model_answers) for text in student_texts]
+def run_full_text_analysis(
+    inputs: FullTextAnalysisInput,
+) -> tuple[FullTextAnalysisResult, Optional[nx.Graph]]:
+    """Orchestrate a full text analysis pipeline.
 
-    # 3) Merge into a feature matrix
-    # feature_names = ["sw_overlap", *list(batch_feats[0].keys())]
-    # X = []
-    # for sw, lex in zip(sw_feats, batch_feats):
-    #     row = [sw] + [lex[k] for k in lex]
-    #     X.append(row)
-    # return np.array(X), feature_names
+    Args:
+        inputs: A FullTextAnalysisInput Pydantic model containing model answers,
+                student texts, and any necessary parameters.
+
+    Returns:
+        A tuple containing:
+            - FullTextAnalysisResult: Pydantic model with all computed metrics and features.
+            - Optional[nx.Graph]: The corpus graph if built, otherwise None.
+
+    """
+    logger.info("Starting full text analysis pipeline...")
+    results = FullTextAnalysisResult()  # Initialize empty result object
+    corpus_graph: Optional[nx.Graph] = None  # Initialize corpus_graph
+
+    # 1. Build Corpus Graph (optional, can be time-consuming)
+    all_corpus_texts_for_graph = inputs.model_answers + inputs.student_texts
+    word_vec_result = create_word_vectors(all_corpus_texts_for_graph)
+    if word_vec_result.word_matrix_csr_scipy is not None and word_vec_result.words_vocabulary:
+        corpus_graph = build_graph_efficiently(word_vec_result)
+        results.corpus_graph_metrics = GraphMetrics(
+            nodes=corpus_graph.number_of_nodes(),
+            edges=corpus_graph.number_of_edges(),
+            density=nx.density(corpus_graph) if corpus_graph.number_of_nodes() > 1 else 0.0,
+        )
+    else:
+        logger.warning("Corpus graph could not be built due to issues with word vector creation.")
+
+    # 2. Lexical/Clustering Features for all students
+    try:
+        lexical_features_result = extract_lexical_features(
+            model_answers=inputs.model_answers,
+            student_answers=inputs.student_texts,
+            linkage_method=inputs.lexical_linkage_method,
+            distance_metric=inputs.lexical_distance_metric,
+            cluster_dist_thresh=inputs.lexical_cluster_dist_thresh,
+        )
+        results.student_lexical_features = lexical_features_result
+    except Exception:
+        logger.exception("Error extracting lexical features:")
+
+    # 3. Per-student analysis (similarity to model answers)
+    per_student_results_list: list[dict[str, Any]] = []
+
+    # Create SmithWatermanConfig from FullTextAnalysisInput for plagiarism params
+    sw_config_for_run = SmithWatermanConfig(
+        k=inputs.plagiarism_k,
+        window_radius=inputs.plagiarism_window_radius,
+        # match_score, mismatch_score, gap_penalty will use defaults from SmithWatermanConfig
+    )
+
+    # Attempt to load spaCy model once if needed for semantic graph
+    # spacy_nlp_model = None
+    # if inputs.calculate_semantic_graph_similarity: # Assuming a flag in FullTextAnalysisInput
+    # try:
+    #     spacy_nlp_model = spacy.load("en_core_web_sm")
+    # except OSError:
+    #     logger.warning("spaCy en_core_web_sm model not found. Semantic graph similarity will be skipped.")
+    # except NameError: # If spacy itself is not imported
+    #     logger.warning("spaCy library not available. Semantic graph similarity will be skipped.")
+
+    for idx, student_text_item in enumerate(inputs.student_texts):
+        student_specific_analysis: dict[str, Any] = {"student_text_index": idx}
+
+        # --- Compare student text to each model answer ---
+        # Storing average or max similarity to model answers for some metrics
+
+        graph_sims_to_models: list[float] = []
+        plagiarism_scores_to_models: list[float] = []
+        overlap_coeffs_to_models: list[float] = []
+        dice_coeffs_to_models: list[float] = []
+        char_eq_scores_to_models: list[float] = []
+        # semantic_graph_sims_to_models: list[float] = []
+
+        for model_text_item in inputs.model_answers:
+            if corpus_graph and corpus_graph.number_of_nodes() > 0:  # Check if graph exists and is not empty
+                graph_sim_output = calculate_graph_similarity(corpus_graph, student_text_item, model_text_item)
+                graph_sims_to_models.append(graph_sim_output.similarity_score)
+
+            plag_score = compute_plagiarism_score_fast(
+                student_text_item,
+                model_text_item,
+                config=sw_config_for_run,
+            )
+            plagiarism_scores_to_models.append(plag_score.overlap_percentage)
+
+            overlap_coeffs_to_models.append(
+                calculate_overlap_coefficient(student_text_item, model_text_item).coefficient,
+            )
+            dice_coeffs_to_models.append(
+                calculate_sorensen_dice_coefficient(student_text_item, model_text_item).coefficient,
+            )
+            char_eq_scores_to_models.append(
+                get_char_by_char_equality_optimized(student_text_item, model_text_item).score,
+            )
+
+            # if spacy_nlp_model:
+            #     s_graph1 = create_semantic_graph_spacy(student_text_item, spacy_nlp_model)
+            #     s_graph2 = create_semantic_graph_spacy(model_text_item, spacy_nlp_model)
+            #     sem_graph_sim = calculate_semantic_graph_similarity_spacy(s_graph1, s_graph2)
+            #     semantic_graph_sims_to_models.append(sem_graph_sim.similarity)
+
+        # Aggregate scores (e.g., average or max)
+        student_specific_analysis["graph_similarity_to_model_avg"] = (
+            np.mean(graph_sims_to_models).item() if graph_sims_to_models else None  # .item() for scalar
+        )
+        student_specific_analysis["plagiarism_score_to_model_max"] = (
+            np.max(plagiarism_scores_to_models).item() if plagiarism_scores_to_models else None  # .item() for scalar
+        )  # Max plagiarism
+        student_specific_analysis["overlap_coefficient_to_model_avg"] = (
+            np.mean(overlap_coeffs_to_models).item() if overlap_coeffs_to_models else None  # .item() for scalar
+        )
+        student_specific_analysis["dice_coefficient_to_model_avg"] = (
+            np.mean(dice_coeffs_to_models).item() if dice_coeffs_to_models else None  # .item() for scalar
+        )
+        student_specific_analysis["char_equality_to_model_avg"] = (
+            np.mean(char_eq_scores_to_models).item() if char_eq_scores_to_models else None  # .item() for scalar
+        )
+
+        per_student_results_list.append(student_specific_analysis)
+
+    results.per_student_analysis = per_student_results_list
+    logger.info("Full text analysis pipeline finished.")
+    return results, corpus_graph
 
 
-def normalize_matrix(X: np.ndarray) -> np.ndarray:
-    scaler = MinMaxScaler()
-    return scaler.fit_transform(X)
-
-
+# --- Example Usage ---
 if __name__ == "__main__":
-    # --- Example data ---
-    model_answers = [
+    # Configure logging level for the example
+    # logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(module)s - %(message)s")
+    logger.info("Starting example script for text analysis...")
+
+    # Example data
+    model_answers_main = [
         "Education is the passport to the future, for tomorrow belongs to those who prepare for it today.",
         "The future belongs to those who prepare for it today; education is their passport.",
+        "Effective learning strategies involve consistent practice and active engagement with the material.",
     ]
-    # Student essays and their human scores (e.g., 0–100)
-    student_texts = [
-        "Tomorrow belongs to those who plan ahead; learning opens doors to tomorrow.",
-        "Education is key to the future because those who learn early succeed.",
-        "Cooking recipes differ from studying methods for tomorrow's success.",  # lower relevance,
-        "The future belongs to those who prepare for it today; education is their passport.",
+    student_texts_main = [
+        "Tomorrow belongs to those who plan ahead; learning opens doors to tomorrow. Education is indeed key.",
+        "Education is key to the future because those who learn early succeed. Preparation is important.",
+        "Cooking recipes differ from studying methods for tomorrow's success. I like to bake cakes.",
+        "The future belongs to those who prepare for it today; education is their passport. "
+        "I agree with this statement.",
+        "To succeed, one must prepare. Education is that preparation for what lies ahead in the future.",
+        "",  # Test with an empty student answer
+        "   ",  # Test with a student answer with only spaces
     ]
-    human_scores = np.array([85, 90, 40, 100])
+    # human_scores_main = np.array([85, 90, 40, 100, 75]) # Example human scores
 
-    # Build & normalize features
-    X_raw = build_feature_matrix(model_answers, student_texts)
-    # X = normalize_matrix(X_raw)
+    # Create input model
+    analysis_input_data = FullTextAnalysisInput(
+        model_answers=model_answers_main,
+        student_texts=student_texts_main,
+        plagiarism_k=4,  # Example override
+        lexical_cluster_dist_thresh=0.6,  # Example override
+    )
 
-    # # Train & cross-validate a Ridge regressor
-    # model = RidgeCV(alphas=[0.1, 1.0, 10.0], cv=3)
-    # cv_scores = cross_val_score(model, X, human_scores, cv=3, scoring="r2")
-    # print(f"Features: {feature_names}")
-    # print(f"CV R² scores: {cv_scores}")
-    # model.fit(X, human_scores)
+    # Run the analysis
+    analysis_output: FullTextAnalysisResult
+    main_corpus_graph: Optional[nx.Graph] = None  # Initialize here
+    try:
+        analysis_output, main_corpus_graph = run_full_text_analysis(analysis_input_data)
+    except Exception as e_main_analysis:
+        logger.critical("Main analysis pipeline failed: %s", e_main_analysis, exc_info=True)
+        sys.exit(1)
 
-    # # Example prediction
-    # new_essay = "Those who study today will own the future because education is the key."
-    # X_new, _ = build_feature_matrix(model_answers, [new_essay])
-    # X_new = normalize_matrix(np.vstack([X_raw, X_new]))[-1].reshape(1, -1)
-    # pred = model.predict(X_new)[0]
-    # print(f"Predicted score for new essay: {pred:.1f}")
+    # --- Print selected results ---
+    print("\n--- Analysis Results ---")
+
+    if analysis_output.corpus_graph_metrics:
+        print("\nCorpus Graph Metrics:")
+        print(f"  Nodes: {analysis_output.corpus_graph_metrics.nodes}")
+        print(f"  Edges: {analysis_output.corpus_graph_metrics.edges}")
+        print(
+            f"  Density: {analysis_output.corpus_graph_metrics.density:.4f}"
+            if analysis_output.corpus_graph_metrics.density is not None
+            else "N/A",
+        )
+
+    if analysis_output.student_lexical_features:
+        print("\nLexical/Clustering Features for Students:")
+        for i, features in enumerate(analysis_output.student_lexical_features.student_features):
+            print(f"  Student {i + 1} (Text: '{student_texts_main[i][:30]}...'):")
+            print(f"    Cophenetic Mean to Models: {features.coph_mean:.4f}")
+            print(f"    Cluster Label: {features.cluster_label}, Size: {features.cluster_size}")
+            print(f"    Is Outlier: {'Yes' if features.is_outlier else 'No'}")
+            print(f"    Silhouette Score: {features.silhouette:.4f}")
+
+    print("\nPer-Student Similarity to Model Answers (Averages/Max):")
+    for i, student_res in enumerate(analysis_output.per_student_analysis):
+        print(
+            f"  Student {i + 1} (Index {student_res.get('student_text_index')},"
+            f" Text: '{student_texts_main[i][:30]}...'):",
+        )
+        gs_avg = student_res.get("graph_similarity_to_model_avg")
+        ps_max = student_res.get("plagiarism_score_to_model_max")
+        oc_avg = student_res.get("overlap_coefficient_to_model_avg")
+        dc_avg = student_res.get("dice_coefficient_to_model_avg")
+        ce_avg = student_res.get("char_equality_to_model_avg")
+
+        print(f"    Avg Graph Similarity to Models: {gs_avg:.4f}" if gs_avg is not None else "N/A")
+        print(f"    Max Plagiarism Score to Models: {ps_max:.4f}" if ps_max is not None else "N/A")
+        print(f"    Avg Overlap Coefficient to Models: {oc_avg:.4f}" if oc_avg is not None else "N/A")
+        print(f"    Avg Dice Coefficient to Models: {dc_avg:.4f}" if dc_avg is not None else "N/A")
+        print(f"    Avg Char Equality to Models: {ce_avg:.4f}" if ce_avg is not None else "N/A")
+
+    # --- Example: Calculating similarity for two specific texts from the original example ---
+    s1 = "Education is the passport to the future, for tomorrow belongs to those who prepare for it today."
+    s2 = "The future belongs to those who prepare for it today; education is their passport."
+
+    print("\n--- Individual Metric Examples (s1 vs s2) ---")
+
+    # Option 1: Use the main corpus graph if available and suitable
+    if main_corpus_graph and main_corpus_graph.number_of_nodes() > 0:
+        print("Using main corpus graph for s1 vs s2 example.")
+        graph_sim_s1s2 = calculate_graph_similarity(main_corpus_graph, s1, s2)
+        print(f"Graph Similarity (s1 vs s2, using main corpus graph): {graph_sim_s1s2.similarity_score:.4f}")
+    else:
+        # Option 2: Build a specific graph for s1 and s2 for this example if main graph not suitable/available
+        print("Main corpus graph not available or empty. Building a local graph for s1 & s2 example...")
+        pair_word_vecs_s1s2 = create_word_vectors([s1, s2])
+        graph_for_s1s2_example = build_graph_efficiently(pair_word_vecs_s1s2)
+
+        if graph_for_s1s2_example.number_of_nodes() > 0:
+            graph_sim_s1s2 = calculate_graph_similarity(graph_for_s1s2_example, s1, s2)
+            print(f"Graph Similarity (s1 vs s2, specific local graph): {graph_sim_s1s2.similarity_score:.4f}")
+        else:
+            print("Specific graph for s1, s2 example is empty, skipping graph similarity.")
+
+    # Create SmithWatermanConfig for this specific call
+    main_sw_config_example = SmithWatermanConfig(
+        k=analysis_input_data.plagiarism_k,  # From FullTextAnalysisInput, possibly overridden
+        window_radius=analysis_input_data.plagiarism_window_radius,  # From FullTextAnalysisInput
+    )
+    plagiarism_s1s2 = compute_plagiarism_score_fast(s1, s2, config=main_sw_config_example)
+    print(f"Fast Plagiarism Overlap (s1 vs s2): {plagiarism_s1s2.overlap_percentage:.2%}")
+
+    overlap_s1s2 = calculate_overlap_coefficient(s1, s2)
+    print(f"Overlap Coefficient (s1 vs s2): {overlap_s1s2.coefficient:.4f}")
+
+    dice_s1s2 = calculate_sorensen_dice_coefficient(s1, s2)
+    print(f"Sørensen-Dice Coefficient (s1 vs s2): {dice_s1s2.coefficient:.4f}")
+
+    char_eq_s1s2 = get_char_by_char_equality_optimized(s1, s2)
+    print(f"Character by Character Equality (s1 vs s2): {char_eq_s1s2.score:.4f}")
+
+    # Semantic Graph Similarity (if spaCy was active and model loaded)
+    # if 'nlp' in globals() and nlp: # Check if nlp was loaded (it's commented out above)
+    #     spacy_graph1 = create_semantic_graph_spacy(s1, nlp)
+    #     spacy_graph2 = create_semantic_graph_spacy(s2, nlp)
+    #     sem_graph_sim_s1s2 = calculate_semantic_graph_similarity_spacy(spacy_graph1, spacy_graph2)
+    #     print(f"Semantic Graph Similarity (spaCy, s1 vs s2): {sem_graph_sim_s1s2.similarity:.4f}")
+    # else:
+    #     print("spaCy model not loaded (or section commented out), skipping semantic graph similarity for s1 vs s2.")
+
+    logger.info("Example script finished.")
