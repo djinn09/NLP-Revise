@@ -53,12 +53,12 @@ try:
     lemmatizer = WordNetLemmatizer()
     _ = lemmatizer.lemmatize("tests")  # Check if it works
 except LookupError as e:
-    print(f"[ERROR] NLTK LookupError initializing WordNetLemmatizer: {e}")  # noqa: T201
-    print("        Ensure 'wordnet' and 'omw-1.4' NLTK data are downloaded.")  # noqa: T201
+    print(f"[ERROR] NLTK LookupError initializing WordNetLemmatizer: {e}")
+    print("        Ensure 'wordnet' and 'omw-1.4' NLTK data are downloaded.")
     lemmatizer = None
     _LEMMA_INIT_FAILED = True
 except Exception as e:
-    print(f"[ERROR] Unexpected error initializing WordNetLemmatizer: {e}")  # noqa: T201
+    print(f"[ERROR] Unexpected error initializing WordNetLemmatizer: {e}")
     lemmatizer = None
     _LEMMA_INIT_FAILED = True
 
@@ -339,11 +339,11 @@ if __name__ == "__main__":
             console = Console()
             separator = lambda: console.print("-" * 60, style="dim")
         except ImportError:
-            separator = lambda: print("-" * 60)  # noqa: T201
+            separator = lambda: print("-" * 60)
         logger.info("Keyword Matching Example [bold green](using Rich logging)[/bold green]")
     else:
         logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        separator = lambda: print("-" * 60)  # noqa: T201
+        separator = lambda: print("-" * 60)
         logger.info("Keyword Matching Example (standard logging - install 'rich' for better output)")
 
     # --- Example Paragraphs ---

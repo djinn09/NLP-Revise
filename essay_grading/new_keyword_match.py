@@ -8,7 +8,7 @@ import string
 from collections import Counter
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple, Union
 
 import nltk
 import rapidfuzz
@@ -31,6 +31,9 @@ from sklearn.metrics.pairwise import (
     cosine_similarity,
     pairwise_distances,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 # try:
 #     nltk.data.find("tokenizers/punkt")
@@ -271,7 +274,7 @@ class TFIDF:
             msg = f"Unsupported metric: {metric}"
             raise ValueError(msg)
         if m == "cosine":
-            print("TFIDF Cosine similarity")  # noqa: T201
+            print("TFIDF Cosine similarity")
             # Cosine similarity in [0,1]
             # Compute full pairwise cosine similarity matrix (2x2)
             sim_matrix = cosine_similarity(tfidf)
@@ -289,7 +292,7 @@ class TFIDF:
             # - Macro-Jaccard: risky and too noisy.
             # - Binary-Jaccard: acceptable if TF-IDF already filtered out unimportant words.
             # Compute Jaccard distance using sklearn's jaccard_score
-            print("TFIDF Jaccard distance...")  # noqa: T201
+            print("TFIDF Jaccard distance...")
             # Convert TF-IDF sparse matrix to binary presence matrix
             dense = tfidf.toarray()
             presence = (dense > 0).astype(int)
@@ -305,7 +308,7 @@ class TFIDF:
             return 1.0 - float(score)
 
         if m == "hamming":
-            print("Hamming distance")  # noqa: T201
+            print("Hamming distance")
             # Character histogram distance normalized by max length
             c1, c2 = Counter(self.original), Counter(self.compare_text)
             all_chars = set(c1) | set(c2)
@@ -388,7 +391,7 @@ class BleuScorer:
             f"Smoothing: {self.smoothing.__name__ if hasattr(self.smoothing, '__name__') else 'Custom Function'}",
         )
 
-    @lru_cache(maxsize=512)  # Increased cache size slightly  # noqa: B019
+    @lru_cache(maxsize=512)  # Increased cache size slightly
     def _preprocess_text(self, text: str) -> Tuple[str, ...]:
         """Tokenizes, cleans, lemmatizes, and filters stop words from text.
 
@@ -663,8 +666,8 @@ if __name__ == "__main__":
     # Output: A dictionary containing various similarity metrics and their scores
     # Note: The output will vary based on the input texts and the similarity metrics used.
     # You can adjust the original_text and compare_text variables to test different cases.
-    print("\nSimilarity (Original vs. Similar):")  # noqa: T201
+    print("\nSimilarity (Original vs. Similar):")
     for k in sorted(similarity_vector.keys()):
         v = similarity_vector[k]
-        print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")  # noqa: T201
+        print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
 

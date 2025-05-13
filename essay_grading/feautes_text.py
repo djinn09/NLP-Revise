@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import pprint
 import re
+import sys
 import time
 import warnings
 from collections import defaultdict
@@ -13,10 +13,8 @@ import spacy
 from scipy.cluster.hierarchy import cophenet, fcluster, linkage
 from scipy.spatial.distance import pdist, squareform
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.linear_model import RidgeCV
 from sklearn.metrics import silhouette_samples
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.model_selection import cross_val_score
 from sklearn.preprocessing import MinMaxScaler
 
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.feature_extraction.text")
@@ -270,7 +268,8 @@ def calculate_graph_similarity(graph, text1, text2):
     try:
         graph_sim = nx.density(subgraph)
         print(
-            f"  Subgraph Nodes: {subgraph.number_of_nodes()}, Edges: {subgraph.number_of_edges()}, Density: {graph_sim:.4f}"
+            f"Subgraph Nodes: {subgraph.number_of_nodes()}, Edges: {subgraph.number_of_edges()}"
+            f", Density: {graph_sim:.4f}",
         )
     except ZeroDivisionError:
         # This might happen if number_of_nodes is < 2, though checked above
@@ -298,7 +297,7 @@ if word_matrix is not None:
     graph = build_graph_efficiently(word_matrix, words)
 else:
     print("Could not create word matrix. Exiting.")
-    exit()
+    sys.exit()
 
 print(f"\nGraph nodes: {graph.number_of_nodes()}, Graph edges: {graph.number_of_edges()}")
 
@@ -427,8 +426,7 @@ def calculate_overlap_coefficient(text1, text2):
     set2 = tokenize_text(text2)
     intersection = len(set1.intersection(set2))
     min_size = min(len(set1), len(set2))
-    overlap_coefficient = intersection / min_size if min_size > 0 else 0.0
-    return overlap_coefficient
+    return intersection / min_size if min_size > 0 else 0.0
 
 
 # Example usage
@@ -526,8 +524,7 @@ def calculate_graph_similarity(graph1, graph2):
     jaccard_similarity_edges = len(edges1.intersection(edges2)) / len(edges1.union(edges2))
     # Combine node and edge similarities using a weighted sum or another method
     # Here, we'll use a simple average
-    jaccard_similarity = (jaccard_similarity_nodes + jaccard_similarity_edges) / 2
-    return jaccard_similarity
+    return (jaccard_similarity_nodes + jaccard_similarity_edges) / 2
 
 
 # Example usage
@@ -621,8 +618,7 @@ def extract_lexical_features(
 def build_feature_matrix(model_answers: List[str], student_texts: List[str]) -> np.ndarray:
     """Return raw feature matrix of shape (n_students, n_features)."""
     # 1) Compute batch lexical features for all students at once
-    batch_feats = extract_lexical_features(model_answers, student_texts)
-    return batch_feats
+    return extract_lexical_features(model_answers, student_texts)
     # 2) Compute Smith  Waterman overlap per student
     # sw_feats = [max(compute_plagiarism_score(text, m) for m in model_answers) for text in student_texts]
 
@@ -657,7 +653,6 @@ if __name__ == "__main__":
 
     # Build & normalize features
     X_raw = build_feature_matrix(model_answers, student_texts)
-    pprint.pprint(f"Raw feature matrix:\n{X_raw}")
     # X = normalize_matrix(X_raw)
 
     # # Train & cross-validate a Ridge regressor
@@ -673,4 +668,3 @@ if __name__ == "__main__":
     # X_new = normalize_matrix(np.vstack([X_raw, X_new]))[-1].reshape(1, -1)
     # pred = model.predict(X_new)[0]
     # print(f"Predicted score for new essay: {pred:.1f}")
-

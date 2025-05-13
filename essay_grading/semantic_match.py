@@ -242,12 +242,12 @@ class SemanticCosineSimilarity:
                 if not valid_chunks:
                     logger.warning(
                         f"Text resulted in no valid (non-empty, non-whitespace) "
-                        f"chunks after processing: '{text_stripped[:50]}...'"
+                        f"chunks after processing: '{text_stripped[:50]}...'",
                     )
                 # aggregated_embedding remains None
                 else:
                     logger.debug(
-                        f"Encoding [magenta]{len(valid_chunks)}[/magenta] chunks for text: '{text_stripped[:50]}...'"
+                        f"Encoding [magenta]{len(valid_chunks)}[/magenta] chunks for text: '{text_stripped[:50]}...'",
                     )
                     # Encode all valid chunks in batches
                     chunk_embeddings: torch.Tensor = self.model.encode(
@@ -261,7 +261,7 @@ class SemanticCosineSimilarity:
                     # Check if encoding produced a valid, non-empty tensor
                     if chunk_embeddings.nelement() == 0:
                         logger.error(
-                            f"Model encoding returned empty tensor for chunks of text: '{text_stripped[:50]}...'"
+                            f"Model encoding returned empty tensor for chunks of text: '{text_stripped[:50]}...'",
                         )
                         # aggregated_embedding remains None
                     else:
@@ -270,7 +270,7 @@ class SemanticCosineSimilarity:
                         aggregated_embedding = torch.mean(chunk_embeddings, dim=0)
                         logger.debug(
                             f"Aggregated embedding shape: "
-                            f"{aggregated_embedding.shape if aggregated_embedding is not None else 'None'}"
+                            f"{aggregated_embedding.shape if aggregated_embedding is not None else 'None'}",
                         )
 
             # Ensure the final embedding (if not None) is 1D.
@@ -299,7 +299,7 @@ class SemanticCosineSimilarity:
                 else:
                     logger.warning(
                         f"Unknown metric '{m_name}' requested. It will be ignored. "
-                        f"Allowed metrics: {list(ALLOWED_METRICS_MAP.keys())}"
+                        f"Allowed metrics: {list(ALLOWED_METRICS_MAP.keys())}",
                     )
         return requested_metrics_internal
 
@@ -434,7 +434,7 @@ class SemanticCosineSimilarity:
 # --- Example Usage ---
 if __name__ == "__main__":
     # This block executes only when the script is run directly.
-    print("Running Semantic Similarity Example...")  # noqa: T201
+    print("Running Semantic Similarity Example...")
 
     # --- Configure Rich Logging for the Example ---
     logging.root.handlers.clear()  # Remove default handlers
@@ -453,12 +453,12 @@ if __name__ == "__main__":
         )
         logging.root.addHandler(rich_handler)
         console = Console()  # For printing separators
-        separator = lambda: console.print("-" * 60, style="dim") if console else print("-" * 60)  # noqa: T201
+        separator = lambda: console.print("-" * 60, style="dim") if console else print("-" * 60)
         logger.info("Starting Semantic Similarity Example [bold green](using Rich logging)[/bold green]")
     else:
         # Fallback to basic logging
         logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        separator = lambda: print("-" * 60)  # noqa: T201
+        separator = lambda: print("-" * 60)
         logger.info("Starting Semantic Similarity Example (using standard logging)")
 
     try:
@@ -483,7 +483,7 @@ if __name__ == "__main__":
 
         # --- Initialize Semantic Similarity Calculator ---
         semantic_calculator = SemanticCosineSimilarity(
-            model=model, chunk_size=CHUNK_SIZE, overlap=OVERLAP, batch_size=BATCH_SIZE
+            model=model, chunk_size=CHUNK_SIZE, overlap=OVERLAP, batch_size=BATCH_SIZE,
         )
 
         # --- Example Texts ---
@@ -550,7 +550,7 @@ if __name__ == "__main__":
             logger.info(f"Calculating for: [bold yellow]{case['desc']}[/bold yellow]")
             # scores_obj is now Optional[SimilarityScores]
             scores_obj: Optional[SimilarityScores] = semantic_calculator.calculate_similarity(
-                case["t1"], case["t2"], metrics_to_calculate=case["metrics"]
+                case["t1"], case["t2"], metrics_to_calculate=case["metrics"],
             )
 
             if scores_obj is not None:

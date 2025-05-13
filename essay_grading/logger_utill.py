@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _rich_available = False
 try:
@@ -51,7 +54,7 @@ def setup_global_logger(
             # If rich was expected but not found, print a warning or raise error
             print(
                 "WARNING: rich library not found. Falling back to basic logging. "
-                "Install with 'pip install rich' for enhanced output."
+                "Install with 'pip install rich' for enhanced output.",
             )
         log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         logging.basicConfig(level=log_level, format=log_format, force=True)

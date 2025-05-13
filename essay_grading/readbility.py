@@ -418,13 +418,13 @@ def perform_readability_analysis(
     euclidean_dist_norm: Optional[float] = None
     manhattan_dist_norm: Optional[float] = None
     meaningful_sample_size = 2
-    if len(corpus_raw_metrics) >= meaningful_sample_size:  # Need at least 2 samples for meaningful normalization by StandardScaler
+    # Need at least 2 samples for meaningful normalization by StandardScaler
+    if len(corpus_raw_metrics) >= meaningful_sample_size:
         logger.info(f"Normalizing metrics across a corpus of {len(corpus_raw_metrics)} texts...")
         try:
             corpus_normalized_metrics: List[ReadabilityMetricsNormalized] = normalize_metrics(corpus_raw_metrics)
-            if len(corpus_normalized_metrics) == len(
-                corpus_raw_metrics
-            ):  # Check if normalization returned expected number of items
+            # Check if normalization returned expected number of items
+            if len(corpus_normalized_metrics) == len(corpus_raw_metrics):
                 norm_student_metrics = corpus_normalized_metrics[0]
                 norm_model_metrics = corpus_normalized_metrics[1]
 
@@ -441,7 +441,7 @@ def perform_readability_analysis(
                 f"Failed to normalize metrics due to ValueError: {e_norm_value}. Normalized distances will be None.",
                 exc_info=True,
             )
-        except Exception as e_norm_unexpected:  # Catch any other unexpected errors during normalization
+        except Exception:  # Catch any other unexpected errors during normalization
             logger.exception(
                 "Unexpected error during metric normalization. Normalized distances will be None.",
             )

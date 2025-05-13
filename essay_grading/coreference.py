@@ -59,11 +59,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple  # Import necessary types for annotation
+from typing import TYPE_CHECKING, Any  # Import necessary types for annotation
 
 import gender_guesser.detector as gender
 import spacy
-from spacy.tokens import Token
+
+if TYPE_CHECKING:
+    from spacy.tokens import Token
 
 # --- Constants ---
 COLLECTIVE_NOUNS = {"team", "committee", "government", "group", "company", "staff", "jury", "class", "party"}
@@ -83,7 +85,7 @@ REPORTING_VERBS = {
     "argue",
 }
 PERSONAL_PRONOUN_LEMMAS = {"he", "she", "it", "they", "we", "i", "you"}
-# List of common inanimate nouns likely to be Neut
+# list of common inanimate nouns likely to be Neut
 NEUTER_NOUNS = {
     "car",
     "book",
@@ -441,7 +443,7 @@ def rule_based_coref_resolution_v4(
     *,
     use_similarity_fallback: bool = False,
     search_sentences: int = 2,
-) -> List[Tuple[Dict[str, Any], Dict[str, Any], float, str]]:
+) -> list[tuple[dict[str, Any], dict[str, Any], float, str]]:
     """Apply v4 rule-based coreference resolution with Unspecified Gender handling.
 
     Identifies coreferent mentions (pronouns, proper nouns) and links them to
@@ -457,7 +459,7 @@ def rule_based_coref_resolution_v4(
                                 to search backwards for antecedents.
 
     Returns:
-        List[Tuple[Dict[str, Any], Dict[str, Any], float, str]]:
+        list[tuple[dict[str, Any], dict[str, Any], float, str]]:
             A list of resolved coreference pairs. Each tuple contains:
             (
                 {'text': str, 'start': int, 'end': int}, # Mention span info
@@ -469,7 +471,7 @@ def rule_based_coref_resolution_v4(
     """
     # Process the text with SpaCy NLP pipeline
     doc = nlp(text)
-    # List to store results internally (using Token objects)
+    # list to store results internally (using Token objects)
     coref_results_internal = []
     # Set to keep track of mention token indices that have already been resolved
     processed_mentions = set()
@@ -556,7 +558,7 @@ def rule_based_coref_resolution_v4(
                 # Rule 2b / 4: Possessive Pronouns ('his', 'her', 'its', 'their') + Relative 'whose'
                 # Search backwards for the *possessor* entity.
                 elif not antecedent and (is_possessive_pronoun or is_relative_possessive):
-                    # List to hold potential candidates found during backward search
+                    # list to hold potential candidates found during backward search
                     potential_candidates = []
                     # Determine rule name based on pronoun type
                     search_rule_name = (
@@ -612,7 +614,7 @@ def rule_based_coref_resolution_v4(
                                     "score": cand_score,
                                     "reason": f"{search_rule_name}{cand_rule_detail}",
                                     "distance": distance,
-                                }
+                                },
                             )
                     # After searching, select the best candidate (highest score, then closest)
                     if potential_candidates:
@@ -702,7 +704,7 @@ def rule_based_coref_resolution_v4(
                                     "score": cand_score,
                                     "reason": f"Std Pronoun: {cand_rule_detail.strip()}",
                                     "distance": distance,
-                                }
+                                },
                             )
                     # Select best candidate
                     if potential_candidates:
@@ -737,7 +739,7 @@ def rule_based_coref_resolution_v4(
                                     "type": "Exact",
                                     "rule": "PN Exact Match",
                                     "distance": token.i - j,
-                                }
+                                },
                             )
                         # Case 2: Partial Match (Full Name -> Last Name)
                         candidate_is_longer = len(candidate.text.split()) > 1
@@ -757,7 +759,7 @@ def rule_based_coref_resolution_v4(
                                         "type": "Partial",  # Slightly lower score than exact
                                         "rule": "PN Partial Match (Last)",
                                         "distance": token.i - j,
-                                    }
+                                    },
                                 )
                 # Select the best PN match
                 if potential_pn_antecedents:
@@ -810,7 +812,7 @@ def rule_based_coref_resolution_v4(
     return coref_pairs_with_indices
 
 if __name__ == "__main__":
-    print("This module is not intended to be run directly.")  # noqa: T201
+    print("This module is not intended to be run directly.")
 
     # --- Testing ---
     # [Include the same testing samples and loop as before]
@@ -849,29 +851,29 @@ if __name__ == "__main__":
     all_samples = {**samples_advanced, **samples_expert}
 
 
-    print("--- Running Coreference Resolution v4 (Comments & Annotations) ---")  # noqa: T201
+    print("--- Running Coreference Resolution v4 (Comments & Annotations) ---")
     for description, text in all_samples.items():
-        print(f"\n--- [{description}] ---")  # noqa: T201
-        print(f"Text: {text}")  # noqa: T201
+        print(f"\n--- [{description}] ---")
+        print(f"Text: {text}")
         try:
             # Call the main resolution function
             pairs_with_indices = rule_based_coref_resolution_v4(text, search_sentences=2, use_similarity_fallback=False)
-            print("Coreference pairs (Mention Span, Antecedent Span, Confidence, Rule):")  # noqa: T201
+            print("Coreference pairs (Mention Span, Antecedent Span, Confidence, Rule):")
             if pairs_with_indices:
                 # Print results in the desired format
                 for pair in pairs_with_indices:
                     mention_span, antecedent_span, conf, rule = pair
-                    print(  # noqa: T201
+                    print(
                         f"  - Mention: '{mention_span['text']}' ({mention_span['start']}:{mention_span['end']}) -> "
                         f"Antecedent: '{antecedent_span['text']}' ({antecedent_span['start']}:{antecedent_span['end']}) "
                         f"(Conf: {conf:.2f}, Rule: {rule})",
                     )
             else:
-                print("  No pairs found.")  # noqa: T201
+                print("  No pairs found.")
 
         except Exception as e:
             # Basic error handling for the loop
-            print(f"\n!!! An error occurred processing '{description}': {e} !!!")  # noqa: T201
+            print(f"\n!!! An error occurred processing '{description}': {e} !!!")
             import traceback
 
             traceback.print_exc()
