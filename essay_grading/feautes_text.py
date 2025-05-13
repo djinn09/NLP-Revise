@@ -168,6 +168,27 @@ class FullTextAnalysisInput(BaseModel):
     lexical_cluster_dist_thresh: float = Field(default=0.5, gt=0)
 
 
+class SinglePairAnalysisInput(BaseModel):
+    """Input for single pair text analysis."""
+
+    model_answer: str
+    student_text: str
+    plagiarism_k: int = Field(default=3, gt=0)
+    plagiarism_window_radius: int = Field(default=50, gt=0)
+    # Add other relevant parameters if needed for specific metrics in single pair analysis
+
+
+class SinglePairAnalysisResult(BaseModel):
+    """Results from analyzing a single student text against a single model answer."""
+
+    graph_similarity: Optional[GraphSimilarityOutput] = None
+    plagiarism_score: Optional[PlagiarismScore] = None
+    overlap_coefficient: Optional[OverlapCoefficient] = None
+    dice_coefficient: Optional[SorensenDiceCoefficient] = None
+    char_equality_score: Optional[CharEqualityScore] = None
+    semantic_graph_similarity: Optional[SemanticGraphSimilarity] = None  # if spaCy part is active
+
+
 class FullTextAnalysisResult(BaseModel):
     """Comprehensive results from analyzing student texts against model answers."""
 
@@ -202,6 +223,8 @@ MODULE_MODELS = [
     LexicalFeaturesAnalysis,
     SmithWatermanConfig,
     FullTextAnalysisInput,
+    SinglePairAnalysisInput,  # Added new model
+    SinglePairAnalysisResult,  # Added new model
     FullTextAnalysisResult,
     SmithWatermanParams,
 ]
@@ -877,14 +900,86 @@ def extract_lexical_features(
     return LexicalFeaturesAnalysis(student_features=student_feature_list)
 
 
-# --- Main Analysis Orchestration Function ---
-# This function will combine calls to the above methods.
+# --- Main Analysis Orchestration Functions ---
+
+
+def run_single_pair_text_analysis(
+    inputs: SinglePairAnalysisInput,
+    existing_graph: Optional[nx.Graph] = None,
+) -> SinglePairAnalysisResult:
+    """Analyze a single model answer against a single student answer.
+
+    Args:
+        inputs: SinglePairAnalysisInput containing the model answer, student text, and parameters.
+        existing_graph: An optional pre-built graph. If None, a local graph for the pair will be built.
+
+    Returns:
+        SinglePairAnalysisResult with computed similarity metrics for the pair.
+
+    """
+    logger.info(
+        f"Starting single pair analysis for student text (first 30 chars): '{inputs.student_text[:30]}...' "
+        f"and model answer (first 30 chars): '{inputs.model_answer[:30]}...'",
+    )
+    results = SinglePairAnalysisResult()
+
+    # Graph Similarity
+    graph_to_use: Optional[nx.Graph] = existing_graph
+    if graph_to_use is None:
+        logger.debug("No existing graph provided for single pair, building a local one.")
+        pair_word_vecs = create_word_vectors([inputs.model_answer, inputs.student_text])
+        if pair_word_vecs.word_matrix_csr_scipy is not None and pair_word_vecs.words_vocabulary:
+            graph_to_use = build_graph_efficiently(pair_word_vecs)
+        else:
+            logger.warning("Could not build local graph for single pair analysis.")
+
+    if graph_to_use and graph_to_use.number_of_nodes() > 0:
+        results.graph_similarity = calculate_graph_similarity(
+            graph_to_use,
+            inputs.student_text,
+            inputs.model_answer,
+        )
+    else:
+        logger.info("Graph for single pair is empty or not built; skipping graph similarity.")
+        results.graph_similarity = GraphSimilarityOutput(
+            similarity_score=0.0, subgraph_nodes=0, subgraph_edges=0, message="Graph not available or empty."
+        )
+
+    # Plagiarism Score
+    sw_config = SmithWatermanConfig(
+        k=inputs.plagiarism_k,
+        window_radius=inputs.plagiarism_window_radius,
+    )
+    results.plagiarism_score = compute_plagiarism_score_fast(
+        inputs.student_text,
+        inputs.model_answer,
+        config=sw_config,
+    )
+
+    # Other direct similarity metrics
+    results.overlap_coefficient = calculate_overlap_coefficient(inputs.student_text, inputs.model_answer)
+    results.dice_coefficient = calculate_sorensen_dice_coefficient(inputs.student_text, inputs.model_answer)
+    results.char_equality_score = get_char_by_char_equality_optimized(inputs.student_text, inputs.model_answer)
+
+    # Semantic Graph Similarity (Optional - requires spaCy setup)
+    # try:
+    #     if nlp: # Assuming nlp is loaded globally if this section is uncommented
+    #         s_graph1 = create_semantic_graph_spacy(inputs.student_text, nlp)
+    #         s_graph2 = create_semantic_graph_spacy(inputs.model_answer, nlp)
+    #         results.semantic_graph_similarity = calculate_semantic_graph_similarity_spacy(s_graph1, s_graph2)
+    #     else:
+    #         logger.info("spaCy model (nlp) not available for semantic graph similarity in single pair analysis.")
+    # except NameError: # If nlp is not defined at all
+    #     logger.info("spaCy (nlp variable) not defined; skipping semantic graph similarity for single pair.")
+
+    logger.info("Single pair analysis finished.")
+    return results
 
 
 def run_full_text_analysis(
     inputs: FullTextAnalysisInput,
 ) -> tuple[FullTextAnalysisResult, Optional[nx.Graph]]:
-    """Orchestrate a full text analysis pipeline.
+    """Orchestrate a full text analysis pipeline for multiple student texts against multiple model answers.
 
     Args:
         inputs: A FullTextAnalysisInput Pydantic model containing model answers,
@@ -905,11 +1000,15 @@ def run_full_text_analysis(
     word_vec_result = create_word_vectors(all_corpus_texts_for_graph)
     if word_vec_result.word_matrix_csr_scipy is not None and word_vec_result.words_vocabulary:
         corpus_graph = build_graph_efficiently(word_vec_result)
-        results.corpus_graph_metrics = GraphMetrics(
-            nodes=corpus_graph.number_of_nodes(),
-            edges=corpus_graph.number_of_edges(),
-            density=nx.density(corpus_graph) if corpus_graph.number_of_nodes() > 1 else 0.0,
-        )
+        if corpus_graph and corpus_graph.number_of_nodes() > 0:  # Check if graph was actually built
+            results.corpus_graph_metrics = GraphMetrics(
+                nodes=corpus_graph.number_of_nodes(),
+                edges=corpus_graph.number_of_edges(),
+                density=nx.density(corpus_graph) if corpus_graph.number_of_nodes() > 1 else 0.0,
+            )
+        else:
+            logger.warning("Corpus graph was attempted but resulted in an empty graph.")
+            corpus_graph = None  # Ensure it's None if empty
     else:
         logger.warning("Corpus graph could not be built due to issues with word vector creation.")
 
@@ -929,80 +1028,59 @@ def run_full_text_analysis(
     # 3. Per-student analysis (similarity to model answers)
     per_student_results_list: list[dict[str, Any]] = []
 
-    # Create SmithWatermanConfig from FullTextAnalysisInput for plagiarism params
-    sw_config_for_run = SmithWatermanConfig(
-        k=inputs.plagiarism_k,
-        window_radius=inputs.plagiarism_window_radius,
-        # match_score, mismatch_score, gap_penalty will use defaults from SmithWatermanConfig
-    )
-
-    # Attempt to load spaCy model once if needed for semantic graph
-    # spacy_nlp_model = None
-    # if inputs.calculate_semantic_graph_similarity: # Assuming a flag in FullTextAnalysisInput
-    # try:
-    #     spacy_nlp_model = spacy.load("en_core_web_sm")
-    # except OSError:
-    #     logger.warning("spaCy en_core_web_sm model not found. Semantic graph similarity will be skipped.")
-    # except NameError: # If spacy itself is not imported
-    #     logger.warning("spaCy library not available. Semantic graph similarity will be skipped.")
-
     for idx, student_text_item in enumerate(inputs.student_texts):
         student_specific_analysis: dict[str, Any] = {"student_text_index": idx}
 
-        # --- Compare student text to each model answer ---
-        # Storing average or max similarity to model answers for some metrics
-
-        graph_sims_to_models: list[float] = []
-        plagiarism_scores_to_models: list[float] = []
-        overlap_coeffs_to_models: list[float] = []
-        dice_coeffs_to_models: list[float] = []
-        char_eq_scores_to_models: list[float] = []
-        # semantic_graph_sims_to_models: list[float] = []
+        graph_sims_to_models_list: list[float] = []
+        plagiarism_scores_to_models_list: list[float] = []
+        overlap_coeffs_to_models_list: list[float] = []
+        dice_coeffs_to_models_list: list[float] = []
+        char_eq_scores_to_models_list: list[float] = []
+        # semantic_graph_sims_to_models_list: list[float] = []
 
         for model_text_item in inputs.model_answers:
-            if corpus_graph and corpus_graph.number_of_nodes() > 0:  # Check if graph exists and is not empty
-                graph_sim_output = calculate_graph_similarity(corpus_graph, student_text_item, model_text_item)
-                graph_sims_to_models.append(graph_sim_output.similarity_score)
+            # Use the single_pair_analysis function for individual metrics
+            single_pair_input = SinglePairAnalysisInput(
+                model_answer=model_text_item,
+                student_text=student_text_item,
+                plagiarism_k=inputs.plagiarism_k,
+                plagiarism_window_radius=inputs.plagiarism_window_radius,
+            )
+            # Pass the pre-built corpus_graph to avoid rebuilding it for each pair for graph similarity
+            pair_analysis_result = run_single_pair_text_analysis(single_pair_input, existing_graph=corpus_graph)
 
-            plag_score = compute_plagiarism_score_fast(
-                student_text_item,
-                model_text_item,
-                config=sw_config_for_run,
-            )
-            plagiarism_scores_to_models.append(plag_score.overlap_percentage)
-
-            overlap_coeffs_to_models.append(
-                calculate_overlap_coefficient(student_text_item, model_text_item).coefficient,
-            )
-            dice_coeffs_to_models.append(
-                calculate_sorensen_dice_coefficient(student_text_item, model_text_item).coefficient,
-            )
-            char_eq_scores_to_models.append(
-                get_char_by_char_equality_optimized(student_text_item, model_text_item).score,
-            )
-
-            # if spacy_nlp_model:
-            #     s_graph1 = create_semantic_graph_spacy(student_text_item, spacy_nlp_model)
-            #     s_graph2 = create_semantic_graph_spacy(model_text_item, spacy_nlp_model)
-            #     sem_graph_sim = calculate_semantic_graph_similarity_spacy(s_graph1, s_graph2)
-            #     semantic_graph_sims_to_models.append(sem_graph_sim.similarity)
+            if pair_analysis_result.graph_similarity:
+                graph_sims_to_models_list.append(pair_analysis_result.graph_similarity.similarity_score)
+            if pair_analysis_result.plagiarism_score:
+                plagiarism_scores_to_models_list.append(pair_analysis_result.plagiarism_score.overlap_percentage)
+            if pair_analysis_result.overlap_coefficient:
+                overlap_coeffs_to_models_list.append(pair_analysis_result.overlap_coefficient.coefficient)
+            if pair_analysis_result.dice_coefficient:
+                dice_coeffs_to_models_list.append(pair_analysis_result.dice_coefficient.coefficient)
+            if pair_analysis_result.char_equality_score:
+                char_eq_scores_to_models_list.append(pair_analysis_result.char_equality_score.score)
+            # if pair_analysis_result.semantic_graph_similarity:
+            #     semantic_graph_sims_to_models_list.append(pair_analysis_result.semantic_graph_similarity.similarity)
 
         # Aggregate scores (e.g., average or max)
         student_specific_analysis["graph_similarity_to_model_avg"] = (
-            np.mean(graph_sims_to_models).item() if graph_sims_to_models else None  # .item() for scalar
+            np.mean(graph_sims_to_models_list).item() if graph_sims_to_models_list else None
         )
         student_specific_analysis["plagiarism_score_to_model_max"] = (
-            np.max(plagiarism_scores_to_models).item() if plagiarism_scores_to_models else None  # .item() for scalar
-        )  # Max plagiarism
+            np.max(plagiarism_scores_to_models_list).item() if plagiarism_scores_to_models_list else None
+        )
         student_specific_analysis["overlap_coefficient_to_model_avg"] = (
-            np.mean(overlap_coeffs_to_models).item() if overlap_coeffs_to_models else None  # .item() for scalar
+            np.mean(overlap_coeffs_to_models_list).item() if overlap_coeffs_to_models_list else None
         )
         student_specific_analysis["dice_coefficient_to_model_avg"] = (
-            np.mean(dice_coeffs_to_models).item() if dice_coeffs_to_models else None  # .item() for scalar
+            np.mean(dice_coeffs_to_models_list).item() if dice_coeffs_to_models_list else None
         )
         student_specific_analysis["char_equality_to_model_avg"] = (
-            np.mean(char_eq_scores_to_models).item() if char_eq_scores_to_models else None  # .item() for scalar
+            np.mean(char_eq_scores_to_models_list).item() if char_eq_scores_to_models_list else None
         )
+        # student_specific_analysis["semantic_graph_similarity_to_model_avg"] = (
+        #    np.mean(semantic_graph_sims_to_models_list).item() if semantic_graph_sims_to_models_list else None
+        # )
 
         per_student_results_list.append(student_specific_analysis)
 
@@ -1035,7 +1113,7 @@ if __name__ == "__main__":
     ]
     # human_scores_main = np.array([85, 90, 40, 100, 75]) # Example human scores
 
-    # Create input model
+    # Create input model for full analysis
     analysis_input_data = FullTextAnalysisInput(
         model_answers=model_answers_main,
         student_texts=student_texts_main,
@@ -1043,7 +1121,7 @@ if __name__ == "__main__":
         lexical_cluster_dist_thresh=0.6,  # Example override
     )
 
-    # Run the analysis
+    # Run the full analysis
     analysis_output: FullTextAnalysisResult
     main_corpus_graph: Optional[nx.Graph] = None  # Initialize here
     try:
@@ -1052,8 +1130,8 @@ if __name__ == "__main__":
         logger.critical("Main analysis pipeline failed: %s", e_main_analysis, exc_info=True)
         sys.exit(1)
 
-    # --- Print selected results ---
-    print("\n--- Analysis Results ---")
+    # --- Print selected results from full analysis ---
+    print("\n--- Full Analysis Results ---")
 
     if analysis_output.corpus_graph_metrics:
         print("\nCorpus Graph Metrics:")
@@ -1092,45 +1170,57 @@ if __name__ == "__main__":
         print(f"    Avg Dice Coefficient to Models: {dc_avg:.4f}" if dc_avg is not None else "N/A")
         print(f"    Avg Char Equality to Models: {ce_avg:.4f}" if ce_avg is not None else "N/A")
 
-    # --- Example: Calculating similarity for two specific texts from the original example ---
-    s1 = "Education is the passport to the future, for tomorrow belongs to those who prepare for it today."
-    s2 = "The future belongs to those who prepare for it today; education is their passport."
+    # --- Example: Run single pair analysis ---
+    print("\n--- Single Pair Analysis Example ---")
+    single_model = "The quick brown fox jumps over the lazy dog."
+    single_student = "A fast, dark-colored fox leaps above a sleepy canine."
 
-    print("\n--- Individual Metric Examples (s1 vs s2) ---")
-
-    # Option 1: Use the main corpus graph if available and suitable
-    if main_corpus_graph and main_corpus_graph.number_of_nodes() > 0:
-        print("Using main corpus graph for s1 vs s2 example.")
-        graph_sim_s1s2 = calculate_graph_similarity(main_corpus_graph, s1, s2)
-        print(f"Graph Similarity (s1 vs s2, using main corpus graph): {graph_sim_s1s2.similarity_score:.4f}")
-    else:
-        # Option 2: Build a specific graph for s1 and s2 for this example if main graph not suitable/available
-        print("Main corpus graph not available or empty. Building a local graph for s1 & s2 example...")
-        pair_word_vecs_s1s2 = create_word_vectors([s1, s2])
-        graph_for_s1s2_example = build_graph_efficiently(pair_word_vecs_s1s2)
-
-        if graph_for_s1s2_example.number_of_nodes() > 0:
-            graph_sim_s1s2 = calculate_graph_similarity(graph_for_s1s2_example, s1, s2)
-            print(f"Graph Similarity (s1 vs s2, specific local graph): {graph_sim_s1s2.similarity_score:.4f}")
-        else:
-            print("Specific graph for s1, s2 example is empty, skipping graph similarity.")
-
-    # Create SmithWatermanConfig for this specific call
-    main_sw_config_example = SmithWatermanConfig(
-        k=analysis_input_data.plagiarism_k,  # From FullTextAnalysisInput, possibly overridden
-        window_radius=analysis_input_data.plagiarism_window_radius,  # From FullTextAnalysisInput
+    single_pair_input_data = SinglePairAnalysisInput(
+        model_answer=single_model,
+        student_text=single_student,
+        plagiarism_k=3,
+        plagiarism_window_radius=20,
     )
-    plagiarism_s1s2 = compute_plagiarism_score_fast(s1, s2, config=main_sw_config_example)
-    print(f"Fast Plagiarism Overlap (s1 vs s2): {plagiarism_s1s2.overlap_percentage:.2%}")
 
-    overlap_s1s2 = calculate_overlap_coefficient(s1, s2)
-    print(f"Overlap Coefficient (s1 vs s2): {overlap_s1s2.coefficient:.4f}")
+    # We can pass the `main_corpus_graph` if we want to use it for graph similarity,
+    # or let `run_single_pair_text_analysis` build a local one if `main_corpus_graph` is None or not suitable.
+    # For this example, let's assume we might want to use the main graph if available.
+    single_pair_result = run_single_pair_text_analysis(single_pair_input_data, existing_graph=main_corpus_graph)
 
-    dice_s1s2 = calculate_sorensen_dice_coefficient(s1, s2)
-    print(f"Sørensen-Dice Coefficient (s1 vs s2): {dice_s1s2.coefficient:.4f}")
+    print(f"Results for single pair ('{single_model[:20]}...' vs '{single_student[:20]}...'):")
+    if single_pair_result.graph_similarity:
+        print(
+            f"  Graph Similarity: {single_pair_result.graph_similarity.similarity_score:.4f} "
+            f"(Subgraph Nodes: {single_pair_result.graph_similarity.subgraph_nodes}, "
+            f"Message: {single_pair_result.graph_similarity.message})"
+        )
+    if single_pair_result.plagiarism_score:
+        print(f"  Plagiarism Score: {single_pair_result.plagiarism_score.overlap_percentage:.4f}")
+    if single_pair_result.overlap_coefficient:
+        print(f"  Overlap Coefficient: {single_pair_result.overlap_coefficient.coefficient:.4f}")
+    if single_pair_result.dice_coefficient:
+        print(f"  Dice Coefficient: {single_pair_result.dice_coefficient.coefficient:.4f}")
+    if single_pair_result.char_equality_score:
+        print(f"  Char Equality Score: {single_pair_result.char_equality_score.score:.4f}")
 
-    char_eq_s1s2 = get_char_by_char_equality_optimized(s1, s2)
-    print(f"Character by Character Equality (s1 vs s2): {char_eq_s1s2.score:.4f}")
+    # --- Example: Using one of the full analysis pairs for individual metric check (as before) ---
+    s1 = model_answers_main[0]  # "Education is the passport to the future..."
+    s2 = student_texts_main[3]  # "The future belongs to those who prepare for it today; education is their passport..."
+
+    print(f"\n--- Individual Metric Examples ('{s1[:20]}...' vs '{s2[:20]}...') ---")
+    individual_pair_input = SinglePairAnalysisInput(model_answer=s1, student_text=s2)
+    individual_pair_results = run_single_pair_text_analysis(individual_pair_input, existing_graph=main_corpus_graph)
+
+    if individual_pair_results.graph_similarity:
+        print(f"Graph Similarity: {individual_pair_results.graph_similarity.similarity_score:.4f}")
+    if individual_pair_results.plagiarism_score:
+        print(f"Fast Plagiarism Overlap: {individual_pair_results.plagiarism_score.overlap_percentage:.2%}")
+    if individual_pair_results.overlap_coefficient:
+        print(f"Overlap Coefficient: {individual_pair_results.overlap_coefficient.coefficient:.4f}")
+    if individual_pair_results.dice_coefficient:
+        print(f"Sørensen-Dice Coefficient: {individual_pair_results.dice_coefficient.coefficient:.4f}")
+    if individual_pair_results.char_equality_score:
+        print(f"Character by Character Equality: {individual_pair_results.char_equality_score.score:.4f}")
 
     # Semantic Graph Similarity (if spaCy was active and model loaded)
     # if 'nlp' in globals() and nlp: # Check if nlp was loaded (it's commented out above)
