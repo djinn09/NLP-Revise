@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal, Set
+from typing import Literal
 
 import yaml
 from dotenv import load_dotenv  # Import python-dotenv
@@ -19,7 +19,7 @@ from pydantic import BaseModel, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # --- Module-level Constants ---
-VALID_ENVS: Set[str] = {"dev", "prod"}  # Define valid environments here
+VALID_ENVS: set[str] = {"dev", "prod"}  # Define valid environments here
 
 
 # --- Configuration Models ---

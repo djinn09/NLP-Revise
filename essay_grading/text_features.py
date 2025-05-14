@@ -67,6 +67,7 @@ class GraphMetrics(BaseModel):
     edges: int = Field(..., ge=0)
     density: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
+
 class SmithWatermanParams(BaseModel):
     """Parameter for the Smith-Waterman algorithm variant.
 
@@ -711,7 +712,7 @@ def preprocess_tfidf(text: str, *, lowercase: bool = True, remove_punct: bool = 
     """Prepare text for TF-IDF: lowercase, remove punctuation."""
     if not isinstance(text, str):
         return ""
-    processed_text = textun
+    processed_text = text
     if lowercase:
         processed_text = processed_text.lower()
     if remove_punct:
@@ -889,7 +890,10 @@ def run_single_pair_text_analysis(
     else:
         logger.info("Graph for single pair is empty or not built; skipping graph similarity.")
         results.graph_similarity = GraphSimilarityOutput(
-            similarity_score=0.0, subgraph_nodes=0, subgraph_edges=0, message="Graph not available or empty."
+            similarity_score=0.0,
+            subgraph_nodes=0,
+            subgraph_edges=0,
+            message="Graph not available or empty.",
         )
 
     # Plagiarism Score
@@ -1139,7 +1143,7 @@ if __name__ == "__main__":
         print(
             f"  Graph Similarity: {single_pair_result.graph_similarity.similarity_score:.4f} "
             f"(Subgraph Nodes: {single_pair_result.graph_similarity.subgraph_nodes}, "
-            f"Message: {single_pair_result.graph_similarity.message})"
+            f"Message: {single_pair_result.graph_similarity.message})",
         )
     if single_pair_result.plagiarism_score:
         print(f"  Plagiarism Score: {single_pair_result.plagiarism_score.overlap_percentage:.4f}")

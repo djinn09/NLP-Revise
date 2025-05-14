@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import math
 import sys
-from typing import List, Optional, Union  # Added Tuple
+from typing import Optional, Union
 
 import numpy as np
 import textstat
@@ -227,7 +227,7 @@ def get_readability_metrics(text: str) -> ReadabilityMetricsRaw:
         raise  # Re-raise the caught exception
 
 
-def normalize_metrics(metrics_list: List[ReadabilityMetricsRaw]) -> List[ReadabilityMetricsNormalized]:
+def normalize_metrics(metrics_list: list[ReadabilityMetricsRaw]) -> list[ReadabilityMetricsNormalized]:
     """Standardize each readability feature across a list of texts."""
     if not metrics_list:
         logger.warning("normalize_metrics received an empty list. Returning empty list.")
@@ -264,7 +264,7 @@ def normalize_metrics(metrics_list: List[ReadabilityMetricsRaw]) -> List[Readabi
             err_msg = f"StandardScaler failed, possibly due to zero variance in a feature: {e_scale}"
             raise ValueError(err_msg) from e_scale
 
-    normalized_metrics_obj_list: List[ReadabilityMetricsNormalized] = []
+    normalized_metrics_obj_list: list[ReadabilityMetricsNormalized] = []
     for row in mat_norm:
         norm_dict = dict(zip(keys, row, strict=True))
         try:
@@ -363,7 +363,9 @@ def compare_raw_metrics_absolute_diff(
 
 
 def perform_readability_analysis(
-    student_text: str, model_text: str, additional_texts_for_corpus: Optional[List[str]] = None
+    student_text: str,
+    model_text: str,
+    additional_texts_for_corpus: Optional[list[str]] = None,
 ) -> ReadabilityAnalysisResult:
     """Perform a readability analysis comparing a student text to a model text.
 
@@ -401,7 +403,7 @@ def perform_readability_analysis(
     if additional_texts_for_corpus:
         corpus_texts.extend(additional_texts_for_corpus)
 
-    corpus_raw_metrics: List[ReadabilityMetricsRaw] = []
+    corpus_raw_metrics: list[ReadabilityMetricsRaw] = []
     for i, text_item in enumerate(corpus_texts):
         try:
             corpus_raw_metrics.append(get_readability_metrics(text_item))
@@ -422,7 +424,7 @@ def perform_readability_analysis(
     if len(corpus_raw_metrics) >= meaningful_sample_size:
         logger.info(f"Normalizing metrics across a corpus of {len(corpus_raw_metrics)} texts...")
         try:
-            corpus_normalized_metrics: List[ReadabilityMetricsNormalized] = normalize_metrics(corpus_raw_metrics)
+            corpus_normalized_metrics: list[ReadabilityMetricsNormalized] = normalize_metrics(corpus_raw_metrics)
             # Check if normalization returned expected number of items
             if len(corpus_normalized_metrics) == len(corpus_raw_metrics):
                 norm_student_metrics = corpus_normalized_metrics[0]
@@ -434,7 +436,7 @@ def perform_readability_analysis(
                 manhattan_dist_norm = calculate_manhattan_distance(norm_student_metrics, norm_model_metrics)
             else:
                 logger.error(
-                    "Normalization returned a different number of items than input. Skipping normalized metrics."
+                    "Normalization returned a different number of items than input.Skipping normalized metrics.",
                 )
         except ValueError as e_norm_value:  # Catch errors from normalize_metrics (e.g., zero variance)
             logger.warning(
@@ -447,7 +449,8 @@ def perform_readability_analysis(
             )
     else:
         logger.warning(
-            f"Corpus size is {len(corpus_raw_metrics)}, which is less than 2. Skipping normalization and normalized distances."
+            f"Corpus size is {len(corpus_raw_metrics)}, which is less than 2."
+            " Skipping normalization and normalized distances.",
         )
 
     return ReadabilityAnalysisResult(
@@ -484,7 +487,9 @@ if __name__ == "__main__":
 
     try:
         analysis_results = perform_readability_analysis(
-            student_text_main, model_text_main, additional_texts_for_corpus=additional_corpus_texts
+            student_text_main,
+            model_text_main,
+            additional_texts_for_corpus=additional_corpus_texts,
         )
     except Exception as e_analysis:
         logger.critical(f"Readability analysis failed critically: {e_analysis}", exc_info=True)

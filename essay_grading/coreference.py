@@ -811,6 +811,7 @@ def rule_based_coref_resolution_v4(
 
     return coref_pairs_with_indices
 
+
 if __name__ == "__main__":
     print("This module is not intended to be run directly.")
 
@@ -818,17 +819,24 @@ if __name__ == "__main__":
     # [Include the same testing samples and loop as before]
     samples_expert = {
         "Pleonastic It": "It is raining heavily today. It seems that the game will be cancelled.",
-        "Relative Who": "The man who arrived late missed the announcement.",  # who -> man
-        "Relative Which": "The report, which detailed the findings, was released.",  # which -> report
-        "Relative Whose": "The artist whose painting won the prize was ecstatic.",  # whose -> artist
-        "Subject Salience": "The cat chased the mouse. It was fast.",  # It -> cat (subject likely preferred over mouse)
+        # who -> man
+        "Relative Who": "The man who arrived late missed the announcement.",
+        # which -> report
+        "Relative Which": "The report, which detailed the findings, was released.",
+        # whose -> artist
+        "Relative Whose": "The artist whose painting won the prize was ecstatic.",
+        # It -> cat (subject likely preferred over mouse)
+        "Subject Salience": "The cat chased the mouse. It was fast.",
         "Possessive His": "John loves his dog.",  # his -> John
         "Possessive Its": "The company announced its profits.",  # its -> company
         "Quote Possessive": 'Mary said, "My car is blue."',  # My -> Mary
-        "PN Partial Refined": "Professor John Smith presented. Later, Smith answered questions. Jane Smith watched.",  # Smith -> John Smith (not Jane Smith)
-        "Complex Sentence": "Although the team lost, they showed great spirit, which pleased their coach.",  # they->team, which->spirit?, their->team
+        # Smith -> John Smith (not Jane Smith)
+        "PN Partial Refined": "Professor John Smith presented. Later, Smith answered questions. Jane Smith watched.",
+        # they->team, which->spirit?, their->team
+        "Complex Sentence": "Although the team lost, they showed great spirit, which pleased their coach.",
         "Weather/Time It": "It is snowing and it is almost noon.",
-        "Cleft It": "It was Susan who solved the puzzle.",  # It -> Pleonastic, who -> Susan
+        # It -> Pleonastic, who -> Susan
+        "Cleft It": "It was Susan who solved the puzzle.",
     }
     samples_advanced = {
         "Appositive": "The CEO of the company, John, gave a speech. He emphasized the importance of innovation.",
@@ -840,16 +848,21 @@ if __name__ == "__main__":
         "Reflexive": "The manager told himself to stay calm.",
         "It ambiguity": "We poured water into the cup until it was full.",  # it -> cup
         "Singular They": "My friend mentioned their new job. They seem happy.",  # They -> friend
-        "Complex": "Alice told Bob that she liked his new car, but he thought it was too flashy.",  # she->Alice, his->Bob(possessive), he->Bob, it->car
+        # she->Alice, his->Bob(possessive), he->Bob, it->car
+        "Complex": "Alice told Bob that she liked his new car, but he thought it was too flashy.",
         "Quote Simple": 'Mary said, "I need coffee."',  # I -> Mary
-        "Quote Complex": 'John asked his team, "Can we finish this today?" They replied affirmatively.',  # we -> team? John+team?, They -> team
-        "Quote Nested": "The report stated, \"The witness claimed, 'He saw the suspect.'\" He later recanted.",  # He (inner) -> witness? suspect?, He (outer) -> witness?
-        "Sentence Window": "Peter called Mike. He was happy. Later, Susan arrived. She brought cake.",  # He->Peter, She->Susan (test windowing)
-        "Proper Noun Repeat": "Dr. Evelyn Reed published her findings. Reed argued for a new approach.",  # Reed -> Dr. Evelyn Reed
-        "Proper Noun Partial": "Chairman John Smith entered. Smith looked tired.",  # Smith -> John Smith
+        # we -> team? John+team?, They -> team
+        "Quote Complex": 'John asked his team, "Can we finish this today?" They replied affirmatively.',
+        # He (inner) -> witness? suspect?, He (outer) -> witness?
+        "Quote Nested": "The report stated, \"The witness claimed, 'He saw the suspect.'\" He later recanted.",
+        # He->Peter, She->Susan (test windowing)
+        "Sentence Window": "Peter called Mike. He was happy. Later, Susan arrived. She brought cake.",
+        # Reed -> Dr. Evelyn Reed
+        "Proper Noun Repeat": "Dr. Evelyn Reed published her findings. Reed argued for a new approach.",
+        # Smith -> John Smith
+        "Proper Noun Partial": "Chairman John Smith entered. Smith looked tired.",
     }
     all_samples = {**samples_advanced, **samples_expert}
-
 
     print("--- Running Coreference Resolution v4 (Comments & Annotations) ---")
     for description, text in all_samples.items():

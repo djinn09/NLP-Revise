@@ -9,7 +9,7 @@ Includes:
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional, Set
+from typing import Any, Optional
 
 import amrlib
 import penman  # Add this import at the top
@@ -62,13 +62,18 @@ class AMRSimilarityCalculator:
     """
 
     def __init__(self, stog_model: Optional[str] = None) -> None:
-        """Initializes the AMRSimilarityCalculator."""
+        """Initialize AMRSimilarityCalculator with the path to a downloaded `amrlib` StoG model.
+
+        Args:
+            stog_model: Path to the downloaded `amrlib` Stack-Transformer (StoG) parsing model directory.
+
+        """
         if not stog_model:
             msg = "AMR model path is required."
             raise ValueError(msg)
         self._load_models(stog_model)
 
-    def _load_models(self, model: Any) -> None:
+    def _load_models(self, model: Any) -> None:  # noqa: ANN401
         """Load the necessary amrlib models."""
         try:
             logger.info("Loading AMR parsing model (StoG)... This may take a moment.")
@@ -106,7 +111,7 @@ class AMRSimilarityCalculator:
             return None
 
     # Example rewriting _get_graph_concepts (Adapt others similarly)
-    def _get_graph_concepts(self, penman_graph_str: str) -> Set[str]:
+    def _get_graph_concepts(self, penman_graph_str: str) -> set[str]:
         """Extract concepts (instance labels and constants) using the penman library."""
         concepts = set()
         if not penman_graph_str:
@@ -143,7 +148,7 @@ class AMRSimilarityCalculator:
             logger.exception(f"Error processing graph with penman library: \nGraph:\n{penman_graph_str}")
         return concepts
 
-    def _get_named_entities(self, penman_graph_str: str) -> Set[str]:
+    def _get_named_entities(self, penman_graph_str: str) -> set[str]:
         nes = set()
         if not penman_graph_str:
             return nes
@@ -170,16 +175,16 @@ class AMRSimilarityCalculator:
             logger.exception(f"Error processing NEs with penman library: {e}\nGraph:\n{penman_graph_str}")
         return nes
 
-    def _get_negations(self, penman_graph: str) -> Set[str]:
-        """Finds concepts associated with a negation (:polarity -)."""
+    def _get_negations(self, penman_graph: str) -> set[str]:
+        """Find concepts associated with a negation (:polarity -)."""
         # Find nodes modified by :polarity -
         negated_concepts = set()
         try:
             lines = penman_graph.strip().split("\n")
             # First pass: find variables directly negated
             for line in lines:
-                line = line.strip()
-                if line.startswith(":polarity -"):
+                strip_line = line.strip()
+                if strip_line.startswith(":polarity -"):
                     # Find the variable this polarity modifies (usually the preceding line)
                     # This parsing is fragile. Proper PENMAN lib needed.
                     pass  # Complex to implement reliably without proper parser
@@ -207,12 +212,30 @@ class AMRSimilarityCalculator:
             logger.exception(f"Penman library failed to decode root from graph:\n{penman_graph_str}")
             return None
         except Exception:
-            logger.exception(f"Error processing root with penman library: {e}\nGraph:\n{penman_graph_str}")
+            logger.exception(f"Error processing root with penman library:\nGraph:\n{penman_graph_str}")
             return None
 
-    def calculate_amr_features(self, text1: str, text2: str) -> Dict[str, Optional[float]]:
-        """Calculates Smatch and other implemented AMR features."""
-        results: Dict[str, Optional[float]] = {
+    def calculate_amr_features(self, text1: str, text2: str) -> dict[str, Optional[float]]:
+        """Calculate a set of features based on Abstract Meaning Representation (AMR) analysis.
+
+        Features calculated:
+            - Smatch F-score, Precision, and Recall
+            - Concept Jaccard Similarity
+            - Named Entity Jaccard Similarity
+            - Negation Jaccard Similarity (placeholder for future implementation)
+            - Root Concept Similarity
+            - Placeholders for future features:
+                - Frame Similarity
+                - SRL Similarity
+                - Reentrancy Similarity
+                - Degree Similarity
+                - Quantifier Similarity
+                - Walk Similarity
+
+        Returns a dictionary with the calculated features as float values.
+        If feature calculation fails, the corresponding field in the dictionary will be None.
+        """
+        results: dict[str, Optional[float]] = {
             "smatch_fscore": None,
             "smatch_precision": None,
             "smatch_recall": None,

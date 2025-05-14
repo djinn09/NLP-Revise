@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import string
 from functools import lru_cache
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Optional, Union
 
 # Attempt to import necessary libraries and provide guidance
 try:
@@ -101,10 +101,26 @@ class KeywordMatcher:
         *,
         use_lemmatization: bool = True,
         use_pos_tagging: bool = False,
-        allowed_pos_tags: Optional[Set[str]] = None,
-        custom_stop_words: Optional[Set[str]] = None,
+        allowed_pos_tags: Optional[set[str]] = None,
+        custom_stop_words: Optional[set[str]] = None,
     ) -> None:
+        """Initialize the KeywordMatcher.
+
+        Args:
+            use_lemmatization (bool, optional): If True, attempt to lemmatize words during keyword
+                extraction and paragraph B normalization for coverage score. Defaults to True. Will
+                be disabled if lemmatizer failed init. *Note: Lemmatization is NOT used for vocabulary
+                cosine score.*
+            use_pos_tagging (bool, optional): If True, extract keywords for coverage score based on
+                allowed POS tags from paragraph_a. Defaults to False.
+            allowed_pos_tags (set[str], optional): A set of NLTK POS tags to consider as keywords if
+                `use_pos_tagging` is True. Defaults to nouns & adjectives.
+            custom_stop_words (set[str], optional): An optional set of custom stop words to add to the
+                default NLTK English list.
+
+        """
         # --- Initial Warning ---
+
         logger.warning(
             "[bold yellow]Initializing KeywordMatcher. Ensure required NLTK data is downloaded![/bold yellow]",
         )
@@ -121,7 +137,8 @@ class KeywordMatcher:
         self.use_lemmatization = use_lemmatization and not _LEMMA_INIT_FAILED
         if use_lemmatization and _LEMMA_INIT_FAILED:
             logger.error(
-                "Lemmatization requested, but lemmatizer failed to initialize. Lemmatization is DISABLED for coverage score.",
+                "Lemmatization requested, but lemmatizer failed to initialize."
+                "Lemmatization is DISABLED for coverage score.",
             )
 
         self.use_pos_tagging = use_pos_tagging
@@ -136,8 +153,8 @@ class KeywordMatcher:
             )
             nltk_stopwords = set()
             self._stopwords_loaded = False
-        except Exception as e:
-            logger.exception(f"An unexpected error occurred loading stopwords: {e}")
+        except Exception:
+            logger.exception("An unexpected error occurred loading stopwords:")
             nltk_stopwords = set()
             self._stopwords_loaded = False
 
@@ -154,7 +171,7 @@ class KeywordMatcher:
         )
 
     @lru_cache(maxsize=128)
-    def _preprocess_text(self, text: str) -> List[str]:
+    def _preprocess_text(self, text: str) -> list[str]:
         """Lowercase, remove punctuation, tokenize, and remove stopwords."""
         if not isinstance(text, str) or not text.strip():
             logger.debug("Preprocessing empty or invalid text. Returning empty list.")
@@ -175,7 +192,7 @@ class KeywordMatcher:
             return []
 
     @lru_cache(maxsize=128)
-    def _normalize_tokens(self, tokens: Tuple[str, ...]) -> Tuple[str, ...]:
+    def _normalize_tokens(self, tokens: tuple[str, ...]) -> tuple[str, ...]:
         """Apply lemmatization (if enabled and available) to a tuple of tokens."""
         if not self.use_lemmatization:
             return tokens
@@ -187,7 +204,8 @@ class KeywordMatcher:
             return normalized
         except LookupError:
             logger.exception(
-                "NLTK LookupError during lemmatization (likely missing 'wordnet'/'omw-1.4'). Returning un-normalized tokens.",
+                "NLTK LookupError during lemmatization (likely missing 'wordnet'/'omw-1.4')."
+                "Returning un-normalized tokens.",
             )
             return tokens
         except Exception:
@@ -195,7 +213,7 @@ class KeywordMatcher:
             return tokens
 
     @lru_cache(maxsize=128)
-    def _get_pos_tags(self, tokens: Tuple[str, ...]) -> List[Tuple[str, str]]:
+    def _get_pos_tags(self, tokens: tuple[str, ...]) -> list[tuple[str, str]]:
         """Get Part-of-Speech tags for a tuple of tokens."""
         if not tokens:
             return []
@@ -205,14 +223,15 @@ class KeywordMatcher:
             return tags
         except LookupError:
             logger.exception(
-                "NLTK LookupError during POS tagging (likely missing 'averaged_perceptron_tagger').Cannot perform POS tagging.",
+                "NLTK LookupError during POS tagging (likely missing 'averaged_perceptron_tagger')."
+                "Cannot perform POS tagging.",
             )
             return []
         except Exception:
             logger.exception(f"Unexpected error during POS tagging of {len(tokens)} tokens.")
             return []
 
-    def _extract_keywords_from_a(self, paragraph_a: str) -> Set[str]:
+    def _extract_keywords_from_a(self, paragraph_a: str) -> set[str]:
         """Extract keywords from paragraph_a based on configuration (for coverage score)."""
         processed_tokens = self._preprocess_text(paragraph_a)
         if not processed_tokens:
@@ -231,7 +250,8 @@ class KeywordMatcher:
                     pos_filtered_tokens = [word for word, tag in tagged_tokens if tag in self.allowed_pos_tags]
                     if pos_filtered_tokens:
                         logger.debug(
-                            f"Extracted {len(pos_filtered_tokens)} potential keywords using POS tags: {self.allowed_pos_tags}",
+                            f"Extracted {len(pos_filtered_tokens)} potential keywords using POS tags"
+                            f". Allowed POS tags: {self.allowed_pos_tags}",
                         )
                         keywords = set(self._normalize_tokens(tuple(pos_filtered_tokens)))
                     else:
@@ -247,7 +267,7 @@ class KeywordMatcher:
 
         return keywords
 
-    def find_matches_and_score(self, paragraph_a: str, paragraph_b: str) -> Dict[str, Union[List[str], float, int]]:
+    def find_matches_and_score(self, paragraph_a: str, paragraph_b: str) -> dict[str, Union[list[str], float, int]]:
         """Find keywords and calculate keyword coverage and vocabulary cosine scores."""
         logger.info("Attempting to find matches and score from Paragraph A in Paragraph B.")
         logger.debug(f"Paragraph A (start): '{paragraph_a[:60]}...'")
@@ -269,7 +289,7 @@ class KeywordMatcher:
 
         return default_result
 
-    def _initialize_default_result(self) -> Dict[str, Union[List[str], float, int]]:
+    def _initialize_default_result(self) -> dict[str, Union[list[str], float, int]]:
         """Initialize the default result dictionary."""
         return {
             "matched_keywords": [],
@@ -302,9 +322,9 @@ class KeywordMatcher:
 
     def _calculate_keyword_coverage(
         self,
-        keywords_a_set: Set[str],
+        keywords_a_set: set[str],
         paragraph_b: str,
-    ) -> Dict[str, Union[List[str], float, int]]:
+    ) -> dict[str, Union[list[str], float, int]]:
         """Calculate keyword coverage score."""
         processed_tokens_b_list = self._preprocess_text(paragraph_b)
         if not processed_tokens_b_list:
@@ -367,12 +387,12 @@ if __name__ == "__main__":
     para_empty = ""
 
     # --- Helper Function to Print Results ---
-    def print_match_results(scenario_name: str, results: Dict) -> None:
+    def print_match_results(scenario_name: str, results: dict) -> None:
         """Print the results of keyword matching for a given scenario.
 
         Args:
             scenario_name (str): The name of the scenario being evaluated.
-            results (Dict): A dictionary containing the results of the keyword matching,
+            results (dict): A dictionary containing the results of the keyword matching,
                             including scores and matched keywords.
 
         """

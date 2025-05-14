@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -78,12 +78,12 @@ METRIC_COSINE = "cosine"
 METRIC_EUCLIDEAN = "euclidean"
 METRIC_MANHATTAN = "manhattan"
 
-ALLOWED_METRICS_MAP: Dict[str, str] = {
+ALLOWED_METRICS_MAP: dict[str, str] = {
     "cosine": METRIC_COSINE,
     "euclidean": METRIC_EUCLIDEAN,
     "manhattan": METRIC_MANHATTAN,
 }
-ALL_METRIC_KEYS: Set[str] = set(ALLOWED_METRICS_MAP.values())
+ALL_METRIC_KEYS: set[str] = set(ALLOWED_METRICS_MAP.values())
 
 
 # --- Pydantic Model for Similarity Scores ---
@@ -278,17 +278,17 @@ class SemanticCosineSimilarity:
             # when squeeze() is applied, though unlikely with sentence transformers.
             if aggregated_embedding is not None and aggregated_embedding.dim() == 0:
                 aggregated_embedding = aggregated_embedding.unsqueeze(0)
-        except Exception as e:
-            logger.exception(f"Failed to encode or aggregate text: '{text_stripped[:50]}...'. Error: {e}")
+        except Exception:
+            logger.exception(f"Failed to encode or aggregate text: '{text_stripped[:50]}...'.")
             aggregated_embedding = None
         return aggregated_embedding
 
-    def _resolve_requested_metrics(self, metrics_to_calculate: Optional[List[str]]) -> Set[str]:
+    def _resolve_requested_metrics(self, metrics_to_calculate: Optional[list[str]]) -> set[str]:
         """Process the user's list of requested metrics into a set of valid internal metric keys.
 
         Defaults to cosine similarity if `metrics_to_calculate` is None.
         """
-        requested_metrics_internal: Set[str] = set()
+        requested_metrics_internal: set[str] = set()
         if metrics_to_calculate is None:
             requested_metrics_internal.add(METRIC_COSINE)
         else:
@@ -310,16 +310,16 @@ class SemanticCosineSimilarity:
         *,
         is_text1_empty: bool,
         is_text2_empty: bool,
-        requested_metrics: Set[str],
-    ) -> Tuple[bool, Optional[SimilarityScores]]:
+        requested_metrics: set[str],
+    ) -> tuple[bool, Optional[SimilarityScores]]:
         """Check for conditions allowing an early exit without embedding generation.
 
         Returns:
-            A tuple (proceed_to_embeddings: bool, result: Optional[Dict[str, float]]).
+            A tuple (proceed_to_embeddings: bool, result: Optional[dict[str, float]]).
             If proceed_to_embeddings is False, 'result' contains the final scores or None.
 
         """
-        scores_data: Dict[str, float] = {}  # Uses internal keys (aliases for SimilarityScores)
+        scores_data: dict[str, float] = {}  # Uses internal keys (aliases for SimilarityScores)
         # Case 1: Texts are identical OR both are effectively empty
         if text1 == text2 or (is_text1_empty and is_text2_empty):
             log_msg = "Texts are identical" if text1 == text2 else "Both texts are effectively empty"
@@ -348,10 +348,10 @@ class SemanticCosineSimilarity:
         self,
         emb1: torch.Tensor,
         emb2: torch.Tensor,
-        requested_metrics: Set[str],
+        requested_metrics: set[str],
     ) -> SimilarityScores:
         """Calculate specified metrics given two 1D embeddings, returns a SimilarityScores object."""
-        scores_data: Dict[str, float] = {}  # Uses internal keys (aliases for SimilarityScores)
+        scores_data: dict[str, float] = {}  # Uses internal keys (aliases for SimilarityScores)
         emb1_reshaped = emb1.unsqueeze(0)
         emb2_reshaped = emb2.unsqueeze(0)
 
@@ -370,7 +370,7 @@ class SemanticCosineSimilarity:
         self,
         text1: str,
         text2: str,
-        metrics_to_calculate: Optional[List[str]] = None,
+        metrics_to_calculate: Optional[list[str]] = None,
     ) -> Optional[SimilarityScores]:
         """Calculate specified similarity/distance metrics between two texts.
 
@@ -423,10 +423,10 @@ class SemanticCosineSimilarity:
             # All checks passed, calculate metrics using the embeddings
             return self._calculate_metrics_for_embeddings(emb1, emb2, requested_metrics)
 
-        except Exception as e:
+        except Exception:
             logger.exception(
                 f"Error during embedding generation or metric calculation for texts: "
-                f"'{text1[:50]}...' vs '{text2[:50]}...'. Error: {e}",
+                f"'{text1[:50]}...' vs '{text2[:50]}...'.",
             )
             return None  # Unexpected error
 
@@ -594,10 +594,10 @@ if __name__ == "__main__":
                 logger.warning(f"Result - {case['desc']}: Calculation Failed or Not Applicable (returned None)")
             separator()
 
-    except ImportError as e:
-        logger.exception(f"Example cannot run due to missing libraries: {e}")
-    except ValueError as e:
-        logger.exception(f"Configuration error in example: {e}")
+    except ImportError:
+        logger.exception("Example cannot run due to missing libraries:")
+    except ValueError:
+        logger.exception("Configuration error in example:")
     except Exception:
         # Catch any other unexpected errors during the example execution.
         logger.exception("An unexpected error occurred in the example:")
