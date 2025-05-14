@@ -182,6 +182,89 @@ class SimilarityCalculatorConfig(BaseModel):
     # bleu_smoothing_function_name: Optional[str] = None # Example if passing smoothing by name
 
 
+class SinglePairAnalysisInput(BaseModel):
+    """Input for single pair text analysis."""
+
+    model_answer: str
+    student_text: str
+    plagiarism_k: int = Field(default=3, gt=0)
+    plagiarism_window_radius: int = Field(default=50, gt=0)
+    # Add other relevant parameters if needed for specific metrics in single pair analysis
+
+
+class GraphSimilarityOutput(BaseModel):
+    """Output of graph-based text similarity calculation."""
+
+    similarity_score: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+    )
+    subgraph_nodes: int = Field(default=0, ge=0)
+    subgraph_edges: int = Field(default=0, ge=0)
+    subgraph_density: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+    )
+    message: Optional[str] = None
+
+
+class PlagiarismScore(BaseModel):
+    """Result of plagiarism detection score."""
+
+    overlap_percentage: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Normalized plagiarism score (0-1).",
+    )
+
+
+class OverlapCoefficient(BaseModel):
+    """Overlap coefficient between two sets of tokens."""
+
+    coefficient: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+    )
+
+
+class SorensenDiceCoefficient(BaseModel):
+    """Sørensen-Dice coefficient between two sets of tokens."""
+
+    coefficient: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+    )
+
+
+class CharEqualityScore(BaseModel):
+    """Character-by-character equality score with decaying weights."""
+
+    score: float = Field(default=0.0, ge=0.0)  # Max score depends on string length
+
+
+class SemanticGraphSimilarity(BaseModel):
+    """Similarity score based on semantic graphs (spaCy based)."""
+
+    similarity: float = Field(default=0.0, ge=0.0, le=1.0)
+    nodes_jaccard: float = Field(default=0.0, ge=0.0, le=1.0)
+    edges_jaccard: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class SinglePairAnalysisResult(BaseModel):
+    """Results from analyzing a single student text against a single model answer."""
+
+    graph_similarity: Optional[GraphSimilarityOutput] = None
+    plagiarism_score: Optional[PlagiarismScore] = None
+    overlap_coefficient: Optional[OverlapCoefficient] = None
+    dice_coefficient: Optional[SorensenDiceCoefficient] = None
+    char_equality_score: Optional[CharEqualityScore] = None
+    semantic_graph_similarity: Optional[SemanticGraphSimilarity] = None  # if spaCy part is active
+
 
 class EssayScores(BaseModel):
     """Data model for essay scores.
@@ -193,4 +276,4 @@ class EssayScores(BaseModel):
 
     semantic_score: float | None = 0.0
     similarity_metrics: SimilarityMetrics
-
+    text_score: SinglePairAnalysisResult

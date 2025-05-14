@@ -19,6 +19,17 @@ from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.metrics import silhouette_samples
 from sklearn.metrics.pairwise import cosine_similarity
 
+from app_types import (
+    CharEqualityScore,
+    GraphSimilarityOutput,
+    OverlapCoefficient,
+    PlagiarismScore,
+    SemanticGraphSimilarity,
+    SinglePairAnalysisInput,
+    SinglePairAnalysisResult,
+    SorensenDiceCoefficient,
+)
+
 # Configure basic logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -55,49 +66,6 @@ class GraphMetrics(BaseModel):
     nodes: int = Field(..., ge=0)
     edges: int = Field(..., ge=0)
     density: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-
-
-class GraphSimilarityOutput(BaseModel):
-    """Output of graph-based text similarity calculation."""
-
-    similarity_score: float = Field(..., ge=0.0, le=1.0)
-    subgraph_nodes: int = Field(..., ge=0)
-    subgraph_edges: int = Field(..., ge=0)
-    subgraph_density: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    message: Optional[str] = None
-
-
-class PlagiarismScore(BaseModel):
-    """Result of plagiarism detection score."""
-
-    overlap_percentage: float = Field(..., ge=0.0, le=1.0, description="Normalized plagiarism score (0-1).")
-
-
-class OverlapCoefficient(BaseModel):
-    """Overlap coefficient between two sets of tokens."""
-
-    coefficient: float = Field(..., ge=0.0, le=1.0)
-
-
-class SorensenDiceCoefficient(BaseModel):
-    """Sørensen-Dice coefficient between two sets of tokens."""
-
-    coefficient: float = Field(..., ge=0.0, le=1.0)
-
-
-class CharEqualityScore(BaseModel):
-    """Character-by-character equality score with decaying weights."""
-
-    score: float = Field(..., ge=0.0)  # Max score depends on string length
-
-
-class SemanticGraphSimilarity(BaseModel):
-    """Similarity score based on semantic graphs (spaCy based)."""
-
-    similarity: float = Field(..., ge=0.0, le=1.0)
-    nodes_jaccard: float = Field(..., ge=0.0, le=1.0)
-    edges_jaccard: float = Field(..., ge=0.0, le=1.0)
-
 
 class SmithWatermanParams(BaseModel):
     """Parameter for the Smith-Waterman algorithm variant.
@@ -168,27 +136,6 @@ class FullTextAnalysisInput(BaseModel):
     lexical_cluster_dist_thresh: float = Field(default=0.5, gt=0)
 
 
-class SinglePairAnalysisInput(BaseModel):
-    """Input for single pair text analysis."""
-
-    model_answer: str
-    student_text: str
-    plagiarism_k: int = Field(default=3, gt=0)
-    plagiarism_window_radius: int = Field(default=50, gt=0)
-    # Add other relevant parameters if needed for specific metrics in single pair analysis
-
-
-class SinglePairAnalysisResult(BaseModel):
-    """Results from analyzing a single student text against a single model answer."""
-
-    graph_similarity: Optional[GraphSimilarityOutput] = None
-    plagiarism_score: Optional[PlagiarismScore] = None
-    overlap_coefficient: Optional[OverlapCoefficient] = None
-    dice_coefficient: Optional[SorensenDiceCoefficient] = None
-    char_equality_score: Optional[CharEqualityScore] = None
-    semantic_graph_similarity: Optional[SemanticGraphSimilarity] = None  # if spaCy part is active
-
-
 class FullTextAnalysisResult(BaseModel):
     """Comprehensive results from analyzing student texts against model answers."""
 
@@ -213,18 +160,18 @@ class FullTextAnalysisResult(BaseModel):
 MODULE_MODELS = [
     WordVectorCreationResult,
     GraphMetrics,
-    GraphSimilarityOutput,
-    PlagiarismScore,
-    OverlapCoefficient,
-    SorensenDiceCoefficient,
-    CharEqualityScore,
-    SemanticGraphSimilarity,
+    # GraphSimilarityOutput,
+    # PlagiarismScore,
+    # OverlapCoefficient,
+    # SorensenDiceCoefficient,
+    # CharEqualityScore,
+    # SemanticGraphSimilarity,
     LexicalClusterFeature,
     LexicalFeaturesAnalysis,
     SmithWatermanConfig,
     FullTextAnalysisInput,
-    SinglePairAnalysisInput,  # Added new model
-    SinglePairAnalysisResult,  # Added new model
+    # SinglePairAnalysisInput,  # Added new model
+    # SinglePairAnalysisResult,  # Added new model
     FullTextAnalysisResult,
     SmithWatermanParams,
 ]
@@ -764,7 +711,7 @@ def preprocess_tfidf(text: str, *, lowercase: bool = True, remove_punct: bool = 
     """Prepare text for TF-IDF: lowercase, remove punctuation."""
     if not isinstance(text, str):
         return ""
-    processed_text = text
+    processed_text = textun
     if lowercase:
         processed_text = processed_text.lower()
     if remove_punct:
