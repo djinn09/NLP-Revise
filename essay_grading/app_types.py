@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Essay(BaseModel):
@@ -266,6 +266,62 @@ class SinglePairAnalysisResult(BaseModel):
     semantic_graph_similarity: Optional[SemanticGraphSimilarity] = None  # if spaCy part is active
 
 
+class KeywordMatcherConfig(BaseModel):
+    """Configuration for the KeywordMatcher."""
+
+    use_lemmatization: bool = Field(
+        default=True,
+        description=(
+            "If True, attempt to lemmatize words for coverage score. Disabled if lemmatizer failed global init."
+        ),
+    )
+    use_pos_tagging: bool = Field(
+        default=False,
+        description="If True, extract keywords for coverage score based on allowed POS tags.",
+    )
+    allowed_pos_tags: Optional[set[str]] = Field(
+        default=None,
+        description="NLTK POS tags for keywords if use_pos_tagging is True. Defaults to nouns & adjectives.",
+    )
+    custom_stop_words: Optional[set[str]] = Field(
+        default=None,
+        description="Custom stop words to add to NLTK's English list.",
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class KeywordMatcherScore(BaseModel):
+    """Score and details from keyword matching."""
+
+    keywords_from_a_count: int = Field(default=0, ge=0, description="Total unique keywords extracted from paragraph A.")
+    matched_keyword_count: int = Field(default=0, ge=0, description="Number of keywords from A matched in B.")
+    keyword_coverage_score: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Proportion of keywords from A found in B.",
+    )
+    vocabulary_cosine_similarity: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Cosine similarity of non-stopword vocabularies.",
+    )
+
+
+class MatcherScores(BaseModel):
+    """Scores and details from keyword matching."""
+
+    matched_keywords: list[str] = Field(
+        default_factory=list,
+        description="List of keywords from paragraph A found in paragraph B (for coverage).",
+    )
+    keywords_matcher_result: KeywordMatcherScore
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class EssayScores(BaseModel):
     """Data model for essay scores.
 
@@ -277,3 +333,4 @@ class EssayScores(BaseModel):
     semantic_score: float | None = 0.0
     similarity_metrics: SimilarityMetrics
     text_score: SinglePairAnalysisResult
+    keyword_matcher: KeywordMatcherScore

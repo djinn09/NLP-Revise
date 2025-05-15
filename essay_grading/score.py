@@ -7,8 +7,9 @@ It includes:
 
 from __future__ import annotations
 
-from app_types import EssayScores
+from app_types import EssayScores, KeywordMatcherConfig
 from key_word_match import SimilarityCalculator
+from keyword_matcher import KeywordMatcher
 from semantic_match import SemanticCosineSimilarity
 from settings import semantic_model, settings, similarity_config
 from text_features import SinglePairAnalysisInput, run_single_pair_text_analysis
@@ -46,25 +47,20 @@ def score_essay(essay: str, reference: str) -> EssayScores:
         student_text=essay,
     )
     individual_pair_results = run_single_pair_text_analysis(text_features_input)
-
-    if individual_pair_results.graph_similarity:
-        print(f"Graph Similarity: {individual_pair_results.graph_similarity.similarity_score:.4f}")
-    if individual_pair_results.plagiarism_score:
-        print(f"Fast Plagiarism Overlap: {individual_pair_results.plagiarism_score.overlap_percentage:.2%}")
-    if individual_pair_results.overlap_coefficient:
-        print(f"Overlap Coefficient: {individual_pair_results.overlap_coefficient.coefficient:.4f}")
-    if individual_pair_results.dice_coefficient:
-        print(f"Sørensen-Dice Coefficient: {individual_pair_results.dice_coefficient.coefficient:.4f}")
-    if individual_pair_results.char_equality_score:
-        print(f"Character by Character Equality: {individual_pair_results.char_equality_score.score}")
+    # Calculate the keyword similarity score
+    config_pos = KeywordMatcherConfig(use_pos_tagging=True)
+    keyword_matcher = KeywordMatcher(config=config_pos)
+    keyword_matcher_results = keyword_matcher.find_matches_and_score(reference, essay)
     similarity_metrics = keyword_similarity_calculator.calculate_single_pair(reference, essay)
     if semantic_score is not None:
         return EssayScores(
             semantic_score=semantic_score.cosine,
             similarity_metrics=similarity_metrics,
             text_score=individual_pair_results,
+            keyword_matcher=keyword_matcher_results.keywords_matcher_result,
         )
     return EssayScores(
         similarity_metrics=similarity_metrics,
         text_score=individual_pair_results,
+        keyword_matcher=keyword_matcher_results.keywords_matcher_result,
     )
