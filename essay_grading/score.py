@@ -11,11 +11,11 @@ from app_types import EssayScores, KeywordMatcherConfig
 from key_word_match import SimilarityCalculator
 from keyword_matcher import KeywordMatcher
 from semantic_match import SemanticCosineSimilarity
-from settings import semantic_model, settings, similarity_config
+from settings import semantic_model, settings, similarity_config # settings is imported here
 from text_features import SinglePairAnalysisInput, run_single_pair_text_analysis
 
 
-def score_essay(essay: str, reference: str) -> EssayScores:
+def score_essay(essay: str, reference: str) -> EssayScores: # Return type hint updated
     """Score an essay based on its semantic similarity to a reference text.
 
     Args:
@@ -23,7 +23,7 @@ def score_essay(essay: str, reference: str) -> EssayScores:
         reference (str): The reference text to compare against.
 
     Returns:
-        float: A score between 0 and 1 representing the semantic similarity.
+        EssayScores: An object containing all calculated scores including the final_score.
 
     """
     # Initialize the semantic cosine similarity model
@@ -37,7 +37,7 @@ def score_essay(essay: str, reference: str) -> EssayScores:
         config=similarity_config,
     )
     # Calculate the semantic similarity score
-    semantic_score = sentence_semantic_model.calculate_similarity(
+    semantic_score_result = sentence_semantic_model.calculate_similarity(
         essay,
         reference,
         metrics_to_calculate=["cosine"],
@@ -49,18 +49,37 @@ def score_essay(essay: str, reference: str) -> EssayScores:
     individual_pair_results = run_single_pair_text_analysis(text_features_input)
     # Calculate the keyword similarity score
     config_pos = KeywordMatcherConfig(use_pos_tagging=True)
-    keyword_matcher = KeywordMatcher(config=config_pos)
-    keyword_matcher_results = keyword_matcher.find_matches_and_score(reference, essay)
+    keyword_matcher_obj = KeywordMatcher(config=config_pos) # Renamed to avoid conflict
+    keyword_matcher_results = keyword_matcher_obj.find_matches_and_score(reference, essay)
     similarity_metrics = keyword_similarity_calculator.calculate_single_pair(reference, essay)
-    if semantic_score is not None:
-        return EssayScores(
-            semantic_score=semantic_score.cosine,
-            similarity_metrics=similarity_metrics,
-            text_score=individual_pair_results,
-            keyword_matcher=keyword_matcher_results.keywords_matcher_result,
-        )
-    return EssayScores(
+    
+    current_semantic_score = None
+    if semantic_score_result is not None:
+        current_semantic_score = semantic_score_result.cosine
+
+    scores_obj = EssayScores(
+        semantic_score=current_semantic_score,
         similarity_metrics=similarity_metrics,
         text_score=individual_pair_results,
         keyword_matcher=keyword_matcher_results.keywords_matcher_result,
     )
+
+    # Calculate final score
+    s_score = scores_obj.semantic_score if scores_obj.semantic_score is not None else 0.0
+    
+    # Ensure keyword_matcher and similarity_metrics are not None before accessing their attributes
+    k_score = 0.0
+    if scores_obj.keyword_matcher: # This is KeywordMatcherScore type
+        k_score = scores_obj.keyword_matcher.keyword_coverage_score
+    
+    t_score = 0.0
+    if scores_obj.similarity_metrics: # This is SimilarityMetrics type
+        t_score = scores_obj.similarity_metrics.tfidf_cosine_similarity if scores_obj.similarity_metrics.tfidf_cosine_similarity is not None else 0.0
+
+    weights = settings.score_weights
+
+    scores_obj.final_score = (s_score * weights.semantic_score_weight) + \
+                             (k_score * weights.keyword_coverage_score_weight) + \
+                             (t_score * weights.tfidf_cosine_similarity_weight)
+    
+    return scores_obj
