@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator # field_validator added
 
 
 class Essay(BaseModel):
@@ -322,11 +322,25 @@ class MatcherScores(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ScoreWeights(BaseModel):
+    """Weights for combining different scores into a final score."""
+    semantic_score_weight: float = Field(default=0.5, ge=0, le=1, description="Weight for the semantic score.")
+    keyword_coverage_score_weight: float = Field(default=0.25, ge=0, le=1, description="Weight for keyword coverage score.")
+    tfidf_cosine_similarity_weight: float = Field(default=0.25, ge=0, le=1, description="Weight for TF-IDF cosine similarity.")
+
+    @field_validator('semantic_score_weight', 'keyword_coverage_score_weight', 'tfidf_cosine_similarity_weight')
+    def check_individual_weights(cls, v, info):
+        if not (0 <= v <= 1):
+            raise ValueError(f"{info.field_name} weight must be between 0 and 1.")
+        return v
+
+
 class EssayScores(BaseModel):
     """Data model for essay scores.
 
     Attributes:
         semantic_score (float | None): The semantic similarity score (None if not calculated).
+        final_score (Optional[float]): The final combined score for the essay.
 
     """
 
@@ -334,3 +348,4 @@ class EssayScores(BaseModel):
     similarity_metrics: SimilarityMetrics
     text_score: SinglePairAnalysisResult
     keyword_matcher: KeywordMatcherScore
+    final_score: Optional[float] = Field(default=None, description="The final combined score for the essay.")

@@ -18,6 +18,8 @@ from dotenv import load_dotenv  # Import python-dotenv
 from pydantic import BaseModel, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app_types import ScoreWeights # Added import
+
 # --- Module-level Constants ---
 VALID_ENVS: set[str] = {"dev", "prod"}  # Define valid environments here
 
@@ -77,12 +79,14 @@ class Settings(BaseSettings):
         env (str): The environment to run in (dev, prod, etc.).
         app (AppConfig): Application configuration.
         semantic (SemanticConfig): Semantic similarity configuration.
+        score_weights (ScoreWeights): Weights for combining different scores.
 
     """
 
     env: str = "dev"
     app: AppConfig = AppConfig()
     semantic: SemanticConfig = SemanticConfig()
+    score_weights: ScoreWeights = ScoreWeights() # Added field
 
     model_config = SettingsConfigDict(
         env_file=None,  # Explicitly disable default .env loading here if we manually load
@@ -241,6 +245,11 @@ if __name__ == "__main__":
             {
                 "app": {"debug": True, "name": "App Name from dev.yaml"},  # YAML highest prio for these
                 "semantic": {"model_name": "model-from-dev-yaml"},
+                "score_weights": { # Example of how score_weights could be set in YAML
+                    "semantic_score_weight": 0.6,
+                    "keyword_coverage_score_weight": 0.2,
+                    "tfidf_cosine_similarity_weight": 0.2,
+                }
                 # "env": "prod" # Test case: YAML overrides APP_ENV for the settings.env field
             },
             f,
@@ -253,15 +262,19 @@ if __name__ == "__main__":
         f.write('APP__VERSION="1.1-from-dev.env"\n')
         f.write("SEMANTIC__BATCH_SIZE=70\n")
         f.write('APP__NAME="App Name from dev.env"\n')  # Will be overridden by YAML
+        f.write("SCORE_WEIGHTS__SEMANTIC_SCORE_WEIGHT=0.4\n") # Example for .env override
     print(f"Created dummy file: {dev_env_path}")
 
     # Simulate setting *actual* process environment variables (these override .env file if load_dotenv(override=False))
     # To test .env override, comment these out or set override=True in load_dotenv
     os.environ["APP__VERSION"] = "1.2-from-PROCESS-ENV"
     os.environ["SEMANTIC__DEVICE"] = "cuda"
+    os.environ["SCORE_WEIGHTS__KEYWORD_COVERAGE_SCORE_WEIGHT"] = "0.33" # Example for process env override
     print("Simulated PROCESS environment variables set:")
-    print(f"  APP__VERSION={os.getenv('APP__VERSION')}")  # Should win over dev.env's APP__VERSION
+    print(f"  APP__VERSION={os.getenv('APP__VERSION')}")
     print(f"  SEMANTIC__DEVICE={os.getenv('SEMANTIC__DEVICE')}")
+    print(f"  SCORE_WEIGHTS__KEYWORD_COVERAGE_SCORE_WEIGHT={os.getenv('SCORE_WEIGHTS__KEYWORD_COVERAGE_SCORE_WEIGHT')}")
+
 
     # --- Load Settings ---
     settings = get_settings()
@@ -276,15 +289,19 @@ if __name__ == "__main__":
         print(f"Semantic Model: {settings.semantic.model_name}")
         print(f"Semantic Batch Size: {settings.semantic.batch_size}")
         print(f"Semantic Device: {settings.semantic.device}")
+        print(f"Score Weights: {settings.score_weights.model_dump_json(indent=2)}")
+
 
     # Expected with default load_dotenv(override=False):
-    # Settings.env: dev (from APP_ENV, as not overridden by YAML in this test setup)
-    # App Name: App Name from dev.yaml (YAML overrides dev.env and PROCESS-ENV for 'name')
-    # App Version: 1.2-from-PROCESS-ENV (PROCESS-ENV overrides dev.env)
-    # App Debug: True (from dev.yaml)
-    # Semantic Model: model-from-dev-yaml (from dev.yaml)
-    # Semantic Batch Size: 70 (from dev.env, as not in YAML or PROCESS-ENV)
-    # Semantic Device: cuda-from-PROCESS-ENV (from PROCESS-ENV, overrides model default)
+    # App Name: App Name from dev.yaml
+    # App Version: 1.2-from-PROCESS-ENV
+    # Semantic Batch Size: 70 (from dev.env)
+    # Semantic Device: cuda (from PROCESS-ENV)
+    # Score Weights:
+    #   semantic_score_weight: 0.6 (from dev.yaml, overrides dev.env)
+    #   keyword_coverage_score_weight: 0.33 (from PROCESS-ENV, overrides model default)
+    #   tfidf_cosine_similarity_weight: 0.2 (from dev.yaml, as not in .env or PROCESS-ENV)
+
 
     # --- Clean up ---
     print("\n--- Cleaning up dummy files ---")
@@ -294,13 +311,9 @@ if __name__ == "__main__":
     with suppress(OSError):
         envs_yaml_dir.rmdir()
     dev_env_path.unlink(missing_ok=True)
-    if "APP_ENV" in os.environ:
-        del os.environ["APP_ENV"]  # Clean up this test specific one
-    if "APP__VERSION" in os.environ:
-        del os.environ["APP__VERSION"]
-    if "SEMANTIC__DEVICE" in os.environ:
-        del os.environ["SEMANTIC__DEVICE"]
-    # If APP__NAME was set in process env for testing, clean it too
-    if "APP__NAME" in os.environ:
-        del os.environ["APP__NAME"]
+    # Clean up environment variables set for the example
+    for key in ["APP_ENV", "APP__VERSION", "SEMANTIC__DEVICE", "APP__NAME",
+                "SCORE_WEIGHTS__SEMANTIC_SCORE_WEIGHT", "SCORE_WEIGHTS__KEYWORD_COVERAGE_SCORE_WEIGHT"]:
+        if key in os.environ:
+            del os.environ[key]
     print("Cleanup complete.")
