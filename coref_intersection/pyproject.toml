@@ -20,9 +20,3 @@ ruff = "^0.11.3"
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
-
-[tool.ruff]
-line-length = 120
-select = ["E", "F", "W", "C90"]
-ignore = ["E501"]
-target-version = "py37"

@@ -14,6 +14,8 @@ from abc import ABC, abstractmethod
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, List, Tuple
 
+from . import utils
+
 if TYPE_CHECKING:
     from spacy.tokens import Doc, Span
 
@@ -83,44 +85,6 @@ class IntersectionStrategy(ABC):
         """
         raise NotImplementedError
 
-    @staticmethod
-    def get_span_noun_indices(doc: Doc, cluster: List[List[int]]) -> List[int]:
-        """Get the indices of the spans in the cluster that contain a noun or proper noun.
-
-        Args:
-            doc (Doc): The SpaCy document containing the cluster.
-            cluster (List[List[int]]): The cluster of spans.
-
-        Returns:
-            List[int]: The indices of the spans in the cluster that contain a noun or proper noun.
-
-        """
-        spans: List[Span] = [doc[span[0] : span[1] + 1] for span in cluster]
-        spans_pos: List[List[str]] = [[token.pos_ for token in span] for span in spans]
-        span_noun_indices: List[int] = [
-            i for i, span_pos in enumerate(spans_pos) if any(pos in span_pos for pos in ["NOUN", "PROPN"])
-        ]
-        return span_noun_indices
-
-    @staticmethod
-    def get_cluster_head(doc: Doc, cluster: List[List[int]], noun_indices: List[int]) -> Tuple[Span, List[int]]:
-        """Get the head span and its indices from a cluster of spans.
-
-        Args:
-            doc (Doc): The spaCy document containing the text.
-            cluster (List[List[int]]): The cluster of spans from which to extract the head.
-            noun_indices (List[int]): The indices of noun phrases in the cluster.
-
-        Returns:
-            Tuple[Span, List[int]]: A tuple containing the head span and its start and end indices.
-
-        """
-        head_idx = noun_indices[0]
-        head_start, head_end = cluster[head_idx]
-        head_span = doc[head_start : head_end + 1]
-        return head_span, [head_start, head_end]
-
-    @staticmethod
     def is_containing_other_spans(span: List[int], all_spans: List[List[int]]) -> bool:
         """Check if the given span contains any other span in the list of all spans.
 
@@ -156,9 +120,9 @@ class IntersectionStrategy(ABC):
         all_spans = [span for cluster in clusters for span in cluster]  # flattened list of all spans
 
         for cluster in clusters:
-            noun_indices = self.get_span_noun_indices(doc, cluster)
+            noun_indices = utils.get_span_noun_indices(doc, cluster)
             if noun_indices:
-                mention_span, mention = self.get_cluster_head(doc, cluster, noun_indices)
+                mention_span, mention = utils.get_cluster_head(doc, cluster, noun_indices)
 
                 for coref in cluster:
                     if coref != mention and not self.is_containing_other_spans(coref, all_spans):
@@ -468,23 +432,6 @@ class StrictIntersectionStrategy(IntersectionStrategy):
         return intersected_clusters
 
 
-def get_cluster_head_idx(doc: Doc, cluster: List[List[int]]) -> int:
-    """Get the index of the head span in a cluster of spans.
-
-    The head span is defined as the first noun phrase in the cluster.
-
-    Args:
-        doc (Doc): The spaCy document containing the text.
-        cluster (List[List[int]]): The cluster of spans from which to extract the head.
-
-    Returns:
-        int: The index of the head span in the cluster.
-
-    """
-    noun_indices = IntersectionStrategy.get_span_noun_indices(doc, cluster)
-    return noun_indices[0] if noun_indices else 0
-
-
 def print_clusters(doc: Doc, clusters: List[List[List[int]]]) -> None:
     """Print the coreference clusters in a human-readable format.
 
@@ -514,7 +461,7 @@ def print_clusters(doc: Doc, clusters: List[List[List[int]]]) -> None:
 
     allen_document = [t.text for t in doc]
     for cluster in clusters:
-        cluster_head_idx = get_cluster_head_idx(doc, cluster)
+        cluster_head_idx = utils.get_cluster_head_idx(doc, cluster)
         if cluster_head_idx >= 0:
             cluster_head = cluster[cluster_head_idx]
             print(get_span_words(cluster_head, allen_document) + " - ", end="")  # noqa: T201

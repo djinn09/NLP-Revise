@@ -1,0 +1,16 @@
+# Requirements for Jupyter Notebooks
+# Python 3.7 environment
+
+# Dependencies for Haystack- & Faiss.ipynb
+farm-haystack[faiss]==1.6.0
+
+# Dependencies for QA_langchain_without_openai.ipynb
+langchain
+accelerate
+bitsandbytes
+
+# Note:
+# - farm-haystack[faiss]==1.6.0 includes specific versions of torch, transformers,
+#   nltk, pandas, sentence-transformers, faiss-cpu, and elasticsearch.
+# - Ensure that the versions pulled by farm-haystack are compatible with langchain.
+#   If version conflicts arise, they may need to be resolved manually.

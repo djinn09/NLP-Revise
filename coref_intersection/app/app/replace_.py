@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, List, Tuple
+from . import utils
 
 if TYPE_CHECKING:
     from spacy.tokens import Doc, Span
@@ -34,22 +35,6 @@ def core_logic_part(
     return resolved
 
 
-def get_span_noun_indices(doc: Doc, cluster: List[List[int]]) -> List[int]:
-    """Get the indices of the spans in the cluster that contain a noun or proper noun.
-
-    Args:
-        doc (Doc): The SpaCy document containing the cluster.
-        cluster (List[List[int]]): The cluster of spans.
-
-    Returns:
-        List[int]: The indices of the spans in the cluster that contain a noun or proper noun.
-
-    """
-    spans = [doc[span[0] : span[1] + 1] for span in cluster]
-    spans_pos = [[token.pos_ for token in span] for span in spans]
-    return [i for i, span_pos in enumerate(spans_pos) if any(pos in span_pos for pos in ["NOUN", "PROPN"])]
-
-
 def is_containing_other_spans(span: List[int], all_spans: List[List[int]]) -> bool:
     """Check if the given span contains any other span in the list of all spans.
 
@@ -62,25 +47,6 @@ def is_containing_other_spans(span: List[int], all_spans: List[List[int]]) -> bo
 
     """
     return any(s[0] >= span[0] and s[1] <= span[1] and s != span for s in all_spans)
-
-
-def get_cluster_head(doc: Doc, cluster: List[List[int]], noun_indices: List[int]) -> Tuple[Span, List[int]]:
-    """Get the head span and its indices from a cluster of spans.
-
-    Args:
-        doc: The spaCy document.
-        cluster: The cluster of spans.
-        noun_indices: The indices of the noun phrases in the cluster.
-
-    Returns:
-        A tuple containing the head span and its indices.
-
-    """
-    head_idx = noun_indices[0]
-    head_start, head_end = cluster[head_idx]
-    head_span = doc[head_start : head_end + 1]
-    return head_span, [head_start, head_end]
-
 
 
 def improved_replace_co_refs(document: Doc, clusters: List[List[List[int]]]) -> str:
@@ -105,12 +71,12 @@ def improved_replace_co_refs(document: Doc, clusters: List[List[List[int]]]) -> 
     # Iterate over each cluster to resolve coreferences
     for cluster in clusters:
         # Get indices of spans containing nouns or proper nouns
-        noun_indices: List[int] = get_span_noun_indices(document, cluster)
+        noun_indices: List[int] = utils.get_span_noun_indices(document, cluster)
 
         # If there are noun indices in the cluster, process the cluster
         if noun_indices:
             # Determine the head span and its indices
-            mention_span, mention = get_cluster_head(document, cluster, noun_indices)
+            mention_span, mention = utils.get_cluster_head(document, cluster, noun_indices)
 
             # Iterate over each coreference in the cluster
             for coref in cluster:

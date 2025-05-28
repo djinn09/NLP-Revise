@@ -10,6 +10,7 @@ from app.intersection import (
 )
 from app.replace_ import improved_replace_co_refs
 from app.utils import get_span_words
+from . import utils
 
 
 def get_coref_object(path: str) -> Predictor:
@@ -90,11 +91,6 @@ def get_improved_coref(doc, clusters):
     return improved_replace_co_refs(doc, clusters)
 
 
-def get_cluster_head_idx(doc, cluster):
-    noun_indices = IntersectionStrategy.get_span_noun_indices(doc, cluster)
-    return noun_indices[0] if noun_indices else 0
-
-
 def get_clusters(doc, clusters):
     def get_span_words(span, allen_document):
         return " ".join(allen_document[span[0] : span[1] + 1])
@@ -102,7 +98,7 @@ def get_clusters(doc, clusters):
     allen_document, clusters = [t.text for t in doc], clusters
     new_clusters = []
     for cluster in clusters:
-        cluster_head_idx = get_cluster_head_idx(doc, cluster)
+        cluster_head_idx = utils.get_cluster_head_idx(doc, cluster)
         if cluster_head_idx >= 0:
             cluster_head = cluster[cluster_head_idx]
             key = get_span_words(cluster_head, allen_document)
